@@ -69,6 +69,8 @@ def get_robot(
 
     resolved = _resolve_robot_name(name, preferred)
     merged = {**_COMMANDER_DEFAULTS, **kwargs}
+    if resolved == "parol6_zdt":
+        merged.pop("normalize_logs", None)
 
     try:
         cls = load_robot_class(resolved)
