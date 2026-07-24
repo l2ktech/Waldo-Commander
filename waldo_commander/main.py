@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from importlib.resources import files as pkg_files
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 
@@ -1332,6 +1333,21 @@ def _cleanup_script_processes_sync() -> None:
 atexit.register(_cleanup_script_processes_sync)
 
 
+def _cancel_page_timer(timer: Any) -> None:
+    """Cancel a NiceGUI timer including an invocation already in flight."""
+    try:
+        timer.cancel(with_current_invocation=True)
+    except TypeError:
+        timer.cancel()
+
+
+def _cleanup_shadow_page_timer(page_client: Client) -> None:
+    timer = getattr(page_client, "_waldo_shadow_ping_timer", None)
+    if timer is not None:
+        _cancel_page_timer(timer)
+        page_client._waldo_shadow_ping_timer = None  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
+
+
 def _cleanup_page_resources(page_client: Client) -> None:
     """Cancel timers and listeners before an active page is replaced."""
     global _page_state
@@ -1341,12 +1357,12 @@ def _cleanup_page_resources(page_client: Client) -> None:
         return
 
     if page_state.ping_timer is not None:
-        page_state.ping_timer.cancel()
+        _cancel_page_timer(page_state.ping_timer)
     if ui_state._joint_jog_timer is not None:
-        ui_state._joint_jog_timer.cancel()
+        _cancel_page_timer(ui_state._joint_jog_timer)
         ui_state._joint_jog_timer = None
     if ui_state._cart_jog_timer is not None:
-        ui_state._cart_jog_timer.cancel()
+        _cancel_page_timer(ui_state._cart_jog_timer)
         ui_state._cart_jog_timer = None
 
     if control_panel is not None:
@@ -1472,6 +1488,7 @@ async def index_page(takeover: str | None = None):
         # as background tasks and would let the new client see a stale slot
         # on refresh.
         global _page_state
+        _cleanup_shadow_page_timer(this_client)
         if ui_state.active_client_id == this_client.id:
             control_lease.release(BROWSER, this_client.id)
             ui_state.active_client_id = None
@@ -1495,7 +1512,11 @@ async def index_page(takeover: str | None = None):
         apply_theme("dark")
         inject_layout_css()
         _build_takeover_overlay("Session active in another tab")
-        ui.timer(interval=1.0, callback=check_ping, active=True)
+        this_client._waldo_shadow_ping_timer = ui.timer(  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
+            interval=1.0,
+            callback=check_ping,
+            active=True,
+        )
         return
 
     apply_theme("dark")

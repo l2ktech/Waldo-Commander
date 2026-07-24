@@ -564,7 +564,10 @@ class _ClickHoldHandler:
 
     def cleanup(self) -> None:
         for tm in self._hold_timers.values():
-            tm.cancel()
+            try:
+                tm.cancel(with_current_invocation=True)
+            except TypeError:
+                tm.cancel()
         self._hold_timers.clear()
         self._holding_active.clear()
 

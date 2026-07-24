@@ -103,13 +103,19 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
 
 def test_playback_cleanup_cancels_page_timer() -> None:
     playback = PlaybackController()
-    timer = SimpleNamespace(cancelled=False)
-    timer.cancel = lambda: setattr(timer, "cancelled", True)
+    timer = SimpleNamespace(cancelled=False, with_current_invocation=False)
+
+    def cancel(*, with_current_invocation: bool = False) -> None:
+        timer.cancelled = True
+        timer.with_current_invocation = with_current_invocation
+
+    timer.cancel = cancel
     playback._sim_timer = timer
 
     playback.cleanup()
 
     assert timer.cancelled is True
+    assert timer.with_current_invocation is True
     assert playback._sim_timer is None
 
 
@@ -119,9 +125,11 @@ def test_page_cleanup_cancels_timers_before_client_is_replaced(monkeypatch) -> N
     class Timer:
         def __init__(self) -> None:
             self.cancelled = False
+            self.with_current_invocation = False
 
-        def cancel(self) -> None:
+        def cancel(self, *, with_current_invocation: bool = False) -> None:
             self.cancelled = True
+            self.with_current_invocation = with_current_invocation
 
     class Panel:
         def __init__(self) -> None:
@@ -152,9 +160,31 @@ def test_page_cleanup_cancels_timers_before_client_is_replaced(monkeypatch) -> N
     main._cleanup_page_resources(page_client)
 
     assert ping_timer.cancelled is True
+    assert ping_timer.with_current_invocation is True
     assert joint_timer.cancelled is True
+    assert joint_timer.with_current_invocation is True
     assert cart_timer.cancelled is True
+    assert cart_timer.with_current_invocation is True
     assert control_panel.cleaned is True
     assert editor_panel.cleaned is True
     assert gripper_panel.cleaned is True
     assert main._page_state is None
+
+
+def test_shadow_page_cleanup_cancels_its_ping_timer() -> None:
+    from waldo_commander import main
+
+    timer = SimpleNamespace(cancelled=False, with_current_invocation=False)
+
+    def cancel(*, with_current_invocation: bool = False) -> None:
+        timer.cancelled = True
+        timer.with_current_invocation = with_current_invocation
+
+    timer.cancel = cancel
+    page_client = SimpleNamespace(_waldo_shadow_ping_timer=timer)
+
+    main._cleanup_shadow_page_timer(page_client)
+
+    assert timer.cancelled is True
+    assert timer.with_current_invocation is True
+    assert page_client._waldo_shadow_ping_timer is None

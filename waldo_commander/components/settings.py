@@ -96,9 +96,15 @@ class SettingsContent:
     def cleanup(self) -> None:
         """Cancel background timers during shutdown."""
         if self._refresh_timer is not None:
-            self._refresh_timer.cancel()
+            try:
+                self._refresh_timer.cancel(with_current_invocation=True)
+            except TypeError:
+                self._refresh_timer.cancel()
         if self._cam_refresh_timer is not None:
-            self._cam_refresh_timer.cancel()
+            try:
+                self._cam_refresh_timer.cancel(with_current_invocation=True)
+            except TypeError:
+                self._cam_refresh_timer.cancel()
 
     # ── Tool helpers ─────────────────────────────────────────────────
 
