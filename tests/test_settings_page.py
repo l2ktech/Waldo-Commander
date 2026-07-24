@@ -170,6 +170,33 @@ async def test_tool_selection_changes_tool(user: User) -> None:
 
 
 @pytest.mark.integration
+async def test_read_only_tool_selection_updates_scene_without_backend_request(
+    user: User, monkeypatch
+) -> None:
+    """Tool selection remains useful for visualization in hardware read-only mode."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("WALDO_READ_ONLY", "1")
+    select_tool = AsyncMock(side_effect=AssertionError("backend call is forbidden"))
+    monkeypatch.setattr(ui_state.control_panel.client, "select_tool", select_tool)
+
+    await user.open("/")
+    await wait_for_app_ready()
+    user.find(kind=ui.tab, content="Settings").click()
+    await asyncio.sleep(0)
+
+    select_el = next(iter(user.find(marker="select-tool").elements))
+    select_el.set_value("PNEUMATIC")
+    for _ in range(20):
+        await asyncio.sleep(0.05)
+        if app_storage.general.get("selected_tool") == "PNEUMATIC":
+            break
+
+    assert app_storage.general.get("selected_tool") == "PNEUMATIC"
+    select_tool.assert_not_awaited()
+
+
+@pytest.mark.integration
 async def test_variant_selector_appears_for_tools_with_variants(user: User) -> None:
     """Test that variant dropdown appears for tools with variants and hides for those without."""
     await user.open("/")

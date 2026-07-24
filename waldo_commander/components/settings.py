@@ -1,6 +1,7 @@
 """Settings component for serial port, theme, and visualization preferences."""
 
 import logging
+import os
 from collections.abc import Callable
 from contextlib import contextmanager
 
@@ -19,6 +20,15 @@ from waldo_commander.services.camera_service import (
 from waldo_commander.state import simulation_state, ui_state
 
 logger = logging.getLogger(__name__)
+
+
+def _read_only_mode() -> bool:
+    return os.environ.get("WALDO_READ_ONLY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def get_available_serial_ports() -> list[str]:
@@ -296,12 +306,13 @@ class SettingsContent:
         async def _on_tool_change(e):
             tool = e.value
             vk = self._get_variant_key(tool)
-            try:
-                await self.client.select_tool(tool, variant_key=vk or "")
-            except Exception as exc:
-                logger.warning("select_tool(%s) failed: %s", tool, exc)
-                ui.notify(f"Tool change failed: {exc}", color="negative")
-                return
+            if not _read_only_mode():
+                try:
+                    await self.client.select_tool(tool, variant_key=vk or "")
+                except Exception as exc:
+                    logger.warning("select_tool(%s) failed: %s", tool, exc)
+                    ui.notify(f"Tool change failed: {exc}", color="negative")
+                    return
 
             ng_app.storage.general["selected_tool"] = tool
             waldoctl.commander.status.tool.variant_key = vk or ""

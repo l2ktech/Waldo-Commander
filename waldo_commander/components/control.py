@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import logging
+import os
 import time
 import re
 import math
@@ -45,6 +46,15 @@ from waldo_commander.services.motion_recorder import motion_recorder
 from waldo_commander.services.programs import is_any_program_running
 
 logger = logging.getLogger(__name__)
+
+
+def _read_only_mode() -> bool:
+    return os.environ.get("WALDO_READ_ONLY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 # Module-level constants and precompiled regexes: avoid recreating them every frame.
 _AXIS_ORDER = (
@@ -886,6 +896,13 @@ class ControlPanel:
         pos = joints.can_jog_pos
         neg = joints.can_jog_neg
 
+        if _read_only_mode():
+            for btn in self._joint_left_btns.values():
+                self._set_strong_disabled(btn, True)
+            for btn in self._joint_right_btns.values():
+                self._set_strong_disabled(btn, True)
+            return
+
         # Skip if state unchanged. The producer swaps the lists wholesale only
         # on change, so identity comparison is a zero-alloc dirty check.
         if (
@@ -930,6 +947,13 @@ class ControlPanel:
         wrf_neg = av_wrf.can_jog_neg if av_wrf else None
         trf_pos = av_trf.can_jog_pos if av_trf else None
         trf_neg = av_trf.can_jog_neg if av_trf else None
+
+        if _read_only_mode():
+            for elem in self._cart_axis_imgs.values():
+                self._set_strong_disabled(elem, True)
+            for elem in self._cart_slot_elems.values():
+                self._set_strong_disabled(elem, True)
+            return
 
         # Identity dirty check against the four per-direction lists (the
         # producer swaps them wholesale only on change), so no per-tick
@@ -996,6 +1020,13 @@ class ControlPanel:
     @staticmethod
     def _movement_allowed(notify: bool = True) -> bool:
         """Return True if robot movement is permitted (simulator active or hardware connected, no script running)."""
+        if _read_only_mode():
+            if notify:
+                ui.notify(
+                    "Read-only hardware mode: motion controls are disabled",
+                    color="warning",
+                )
+            return False
         if is_any_program_running():
             if notify:
                 ui.notify("Script is running — jog disabled", color="warning")
@@ -1695,7 +1726,9 @@ class ControlPanel:
             await self.client.move_j(target, speed=spd)
         except Exception as e:
             logger.error("Go to joint limit failed: %s", e)
-            ui.notify(f"Failed joint move: {e}", color="negative")
+            if self._ui_client is not None:
+                with self._ui_client:
+                    ui.notify(f"Failed joint move: {e}", color="negative")
 
     # ---- Gizmo control methods ----
 

@@ -11,6 +11,7 @@ from waldo_commander.services.camera_service import (
     LinuxpyBackend,
     OpenCVBackend,
     _BLACK_1PX,
+    _enumerate_v4l2_cli,
 )
 
 # A minimal valid JPEG (1x1 white pixel).
@@ -123,3 +124,26 @@ def test_backend_fallback_to_opencv_when_linuxpy_fails():
     assert cs.active
     assert open_calls == ["linuxpy", "opencv"]
     cs.stop()
+
+
+@pytest.mark.unit
+def test_v4l2_cli_enumeration_skips_metadata_nodes(tmp_path):
+    video0 = tmp_path / "video0"
+    video1 = tmp_path / "video1"
+    video12 = tmp_path / "video12"
+    for path in (video0, video1, video12):
+        path.touch()
+
+    def run(command, capture_output, text, check, timeout):
+        del capture_output, text, check, timeout
+        return type("Result", (), {"returncode": 1 if command[2].endswith("1") else 0})()
+
+    with (
+        patch("waldo_commander.services.camera_service.shutil.which", return_value="v4l2-ctl"),
+        patch("waldo_commander.services.camera_service.Path", return_value=tmp_path),
+        patch("waldo_commander.services.camera_service.subprocess.run", side_effect=run),
+    ):
+        assert _enumerate_v4l2_cli(32) == [
+            {"index": 0, "label": "Camera 0"},
+            {"index": 12, "label": "Camera 12"},
+        ]

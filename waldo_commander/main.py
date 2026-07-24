@@ -219,6 +219,12 @@ async def initialize_urdf_scene() -> None:
     except Exception as e:
         logger.error("Failed to sync TCP tool pose: %s", e)
 
+    # The status consumer can receive the real hardware angles before the
+    # page-scoped URDF scene exists.  Apply that cached truth immediately so
+    # the first rendered robot pose is not the URDF's all-zero default while
+    # waiting for the next multicast status frame.
+    _sync_scene_to_cached_status()
+
     if ui_state.urdf_scene.scene:
         scene: ui.scene = ui_state.urdf_scene.scene
         scene._props["grid"] = (10, 100)
@@ -273,6 +279,15 @@ async def initialize_urdf_scene() -> None:
     # Scene wasn't ready earlier, so apply simulator appearance now.
     if waldoctl.commander.status.simulator_active:
         ui_state.urdf_scene.set_simulator_appearance(True)
+
+
+def _sync_scene_to_cached_status() -> None:
+    """Apply the latest backend status to a newly-created URDF scene."""
+    scene = ui_state.urdf_scene
+    if scene is None:
+        return
+    update_urdf_angles(waldoctl.commander.status.joints.angles.deg)
+    scene.update_from_robot_state()
 
 
 async def start_controller(com_port: str | None) -> None:

@@ -19,6 +19,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from pathlib import Path
+import shutil
+import subprocess
 import sys
 from typing import Protocol
 
@@ -234,7 +237,7 @@ class CameraService:
 camera_service = CameraService()
 
 
-def enumerate_video_devices(max_check: int = 10) -> list[dict[str, int | str]]:
+def enumerate_video_devices(max_check: int = 32) -> list[dict[str, int | str]]:
     """Detect available video capture devices.
 
     On Linux, uses linuxpy/v4l2 to check device capabilities (avoids
@@ -245,6 +248,9 @@ def enumerate_video_devices(max_check: int = 10) -> list[dict[str, int | str]]:
     """
     if sys.platform == "linux":
         devs = _enumerate_v4l2(max_check)
+        if devs is not None:
+            return devs
+        devs = _enumerate_v4l2_cli(max_check)
         if devs is not None:
             return devs
     return _enumerate_opencv(max_check)
@@ -279,6 +285,35 @@ def _enumerate_v4l2(max_check: int) -> list[dict[str, int | str]] | None:
             pass
         except Exception:
             logger.debug("v4l2 probe failed for %s", path, exc_info=True)
+    return devices
+
+
+def _enumerate_v4l2_cli(max_check: int) -> list[dict[str, int | str]] | None:
+    """Use v4l2-ctl when linuxpy is unavailable, without noisy OpenCV probing."""
+    command = shutil.which("v4l2-ctl")
+    if command is None:
+        return None
+    devices: list[dict[str, int | str]] = []
+    paths = sorted(
+        Path("/dev").glob("video*"),
+        key=lambda path: int(path.name.removeprefix("video")),
+    )
+    for path in paths:
+        suffix = path.name.removeprefix("video")
+        if not suffix.isdecimal():
+            continue
+        index = int(suffix)
+        if index >= max_check:
+            continue
+        probe = subprocess.run(
+            [command, "--device", str(path), "--get-fmt-video"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1.0,
+        )
+        if probe.returncode == 0:
+            devices.append({"index": index, "label": f"Camera {index}"})
     return devices
 
 

@@ -1,9 +1,49 @@
 """Smoke tests for Waldo Commander app startup and basic UI presence."""
 
 import pytest
+import numpy as np
 from nicegui.testing import User
 
 from tests.helpers.wait import wait_for_app_ready
+
+
+def test_new_scene_applies_cached_backend_angles(monkeypatch) -> None:
+    """A new URDF scene must not render one frame at the zero-angle pose."""
+    import waldoctl
+    import waldo_commander.main as subject
+    from waldo_commander.state import ui_state
+
+    expected = np.array([8.3, -132.8, 109.7, -24.0, -63.3, 76.1])
+    waldoctl.commander.status.joints.angles.set_deg(expected)
+    applied: list[np.ndarray] = []
+
+    class Scene:
+        def __init__(self) -> None:
+            self.updated = False
+
+        def update_from_robot_state(self) -> None:
+            self.updated = True
+
+    scene = Scene()
+    monkeypatch.setattr(ui_state, "urdf_scene", scene)
+    monkeypatch.setattr(
+        subject,
+        "update_urdf_angles",
+        lambda angles: applied.append(np.array(angles, copy=True)),
+    )
+
+    subject._sync_scene_to_cached_status()
+
+    assert len(applied) == 1
+    np.testing.assert_allclose(applied[0], expected)
+    assert scene.updated is True
+
+
+def test_read_only_mode_rejects_motion_without_backend_call(monkeypatch) -> None:
+    from waldo_commander.components.control import ControlPanel
+
+    monkeypatch.setenv("WALDO_READ_ONLY", "1")
+    assert ControlPanel._movement_allowed(notify=False) is False
 
 
 @pytest.mark.integration
