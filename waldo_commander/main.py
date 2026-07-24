@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from importlib.resources import files as pkg_files
 from pathlib import Path
+from uuid import uuid4
 
 
 import numpy as np
@@ -118,6 +119,7 @@ class _PageState:
 
 
 _page_state: _PageState | None = None
+_pending_takeover_token: str | None = None
 
 # Pre-allocated buffers for numba pipelines (scratch space)
 _rotation_matrix_buffer: np.ndarray = np.zeros((3, 3), dtype=np.float64)
@@ -1363,8 +1365,14 @@ def _build_takeover_overlay(message: str) -> None:
             ui.label(message).classes("text-sm text-center opacity-90")
 
             def _take_over() -> None:
-                ui_state.active_client_id = None
-                ui.navigate.reload()
+                global _pending_takeover_token
+
+                # Carry a one-shot claim through the reload. Keeping the old
+                # owner in place until the claimant arrives prevents every
+                # shadow tab's heartbeat from racing for an empty slot.
+                token = uuid4().hex
+                _pending_takeover_token = token
+                ui.navigate.to(f"/?takeover={token}")
 
             ui.button("Take over", on_click=_take_over).props(
                 "color=primary unelevated rounded"
@@ -1392,8 +1400,8 @@ def _build_takeover_overlay(message: str) -> None:
 
 
 @ui.page("/")
-async def index_page():
-    global _page_state
+async def index_page(takeover: str | None = None):
+    global _page_state, _pending_takeover_token
     this_client = ui.context.client
     # Don't set _page_state yet — wait until panels are built so the
     # status consumer never touches stale panel references from a
@@ -1405,7 +1413,19 @@ async def index_page():
     # Also reclaim if the held id is stale (tab disconnected without
     # firing _on_disconnect, or test fixtures churning clients rapidly).
     held_id = ui_state.active_client_id
-    if held_id is None or held_id not in Client.instances:
+    is_takeover = (
+        takeover is not None
+        and _pending_takeover_token is not None
+        and takeover == _pending_takeover_token
+    )
+    if is_takeover:
+        if held_id is not None:
+            control_lease.release(BROWSER, held_id)
+        if editor_panel is not None:
+            editor_panel.cleanup()
+        ui_state.active_client_id = this_client.id
+        _pending_takeover_token = None
+    elif held_id is None or held_id not in Client.instances:
         ui_state.active_client_id = this_client.id
     is_active = ui_state.active_client_id == this_client.id
     if is_active:
