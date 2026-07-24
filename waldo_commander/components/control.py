@@ -586,11 +586,9 @@ def _safe_task(coro: Any) -> asyncio.Task:
 def _normalized_speed(speed_percent: float, backend_package: str) -> float:
     normalized = max(0.01, min(1.0, speed_percent / 100.0))
     if backend_package == "parol6_zdt_backend":
-        # The ZDT backend can encode only 0.6..1.0.  Map Waldo's ten visible
-        # rating steps (10%..100%) across that whole range so every step has
-        # an observable effect instead of collapsing the first six to 0.6.
-        rating_normalized = max(0.1, normalized)
-        return 0.6 + ((rating_normalized - 0.1) / 0.9) * 0.4
+        # ZDT's installed profile maps this fraction onto its joint-speed
+        # ceiling. Keep all ten visible levels distinct (10%..100%).
+        return max(0.1, normalized)
     return normalized
 
 
@@ -610,8 +608,8 @@ def _norm_accel() -> float:
 class ControlPanel:
     """Bottom-left control panel for jog settings and robot control."""
 
-    INCREMENTAL_MOVE_TIMEOUT_S = 30.0
-    EXACT_MOVE_TIMEOUT_S = 30.0
+    INCREMENTAL_MOVE_TIMEOUT_S = 120.0
+    EXACT_MOVE_TIMEOUT_S = 120.0
 
     def __init__(self, client: RobotClient) -> None:
         """Initialize control panel with jog state and required robot client."""
@@ -1674,13 +1672,21 @@ class ControlPanel:
             axis = self._get_first_pressed_axis()
             if axis is not None:
                 axis_name, direction, frame = self._get_cart_axis_lookup()[axis]
-                await self.client.jog_l(
-                    frame,
-                    axis_name,
-                    speed * direction,
-                    self.STREAM_TIMEOUT_S,
-                    accel=_norm_accel(),
-                )
+                try:
+                    await self.client.jog_l(
+                        frame,
+                        axis_name,
+                        speed * direction,
+                        self.STREAM_TIMEOUT_S,
+                        accel=_norm_accel(),
+                    )
+                except Exception as error:
+                    self._cart_pressed_axes[axis] = False
+                    if ui_state.cart_jog_timer is not None:
+                        ui_state.cart_jog_timer.active = False
+                    self._apply_pressed_style(self._cart_axis_imgs.get(axis), False)
+                    logger.error("Cartesian jog failed: %s", error)
+                    ui.notify(f"笛卡尔点动失败：{error}", color="negative")
             self._cart_cadence.tick(
                 time.time(),
                 self.JOG_TICK_S,

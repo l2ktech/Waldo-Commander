@@ -91,6 +91,13 @@ from waldo_commander.state import (
 
 logger = logging.getLogger(__name__)
 
+
+def _urdf_angle_signs(backend_package: str) -> list[int]:
+    """Visual-only joint signs; hardware calibration remains untouched."""
+    if backend_package == "parol6_zdt_backend":
+        return [-1, 1, 1, 1, 1, 1]
+    return [1, 1, 1, 1, 1, 1]
+
 STATIC_DIR = pkg_files("waldo_commander").joinpath("static")
 ng_app.add_static_files("/static", str(STATIC_DIR))
 
@@ -204,7 +211,7 @@ async def initialize_urdf_scene() -> None:
         background_color=bg_color,
         sim_color=SceneColors.SIM_AMBER_HEX,
         sim_opacity=0.9,
-        # Kinematic-mapping defaults are correct for PAROL6, so none are set here.
+        angle_signs=_urdf_angle_signs(robot.backend_package),
     )
 
     ui_state.urdf_scene = UrdfScene(urdf_path, config=scene_config)
@@ -1118,14 +1125,14 @@ def _register_handlers() -> None:
     async def _restore_settings() -> None:
         """Restore persisted motion profile and tool selection."""
         if skip_startup_commands:
-            logger.info("Skipping profile/tool startup commands")
-            return
-        try:
-            saved_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")
-            await client.select_profile(saved_profile)
-            logger.debug("startup: set motion profile to %s", saved_profile)
-        except Exception as e:
-            logger.warning("startup: select_profile failed: %s", e)
+            logger.info("Skipping motion profile startup command")
+        else:
+            try:
+                saved_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")
+                await client.select_profile(saved_profile)
+                logger.debug("startup: set motion profile to %s", saved_profile)
+            except Exception as e:
+                logger.warning("startup: select_profile failed: %s", e)
 
         try:
             saved_tool = ng_app.storage.general.get("selected_tool", "")

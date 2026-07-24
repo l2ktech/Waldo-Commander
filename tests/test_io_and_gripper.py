@@ -4,8 +4,25 @@ import asyncio
 
 import pytest
 from nicegui.testing import User
+from types import SimpleNamespace
 
 from tests.helpers.wait import wait_for_app_ready, wait_for_tool_key
+
+
+@pytest.mark.asyncio
+async def test_gripper_stop_uses_dedicated_tool_stop_action() -> None:
+    from waldo_commander.components.gripper import GripperPage
+
+    calls: list[tuple] = []
+
+    async def tool_action(key, action, params, *, wait, timeout):
+        calls.append((key, action, params, wait, timeout))
+        return 1
+
+    page = GripperPage(SimpleNamespace(tool_action=tool_action))
+    await page._stop_gripper()
+
+    assert calls == [("STS3215", "stop", [], True, 10.0)]
 
 
 @pytest.mark.integration

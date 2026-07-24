@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from collections.abc import Callable
 
@@ -105,6 +106,16 @@ class GripperPage:
         except Exception as e:
             logger.error("Gripper %s failed: %s", label.lower(), e)
             ui.notify(f"{label} failed: {e}", color="negative")
+
+    async def _stop_gripper(self) -> None:
+        """Stop tool motion without changing the six-axis hold state."""
+        try:
+            await self.client.tool_action(
+                "STS3215", "stop", [], wait=True, timeout=10.0
+            )
+        except Exception as error:
+            logger.error("Gripper stop failed: %s", error)
+            ui.notify(f"夹爪停止失败：{error}", color="negative")
 
     # ---- Build ----
 
@@ -482,6 +493,26 @@ class GripperPage:
             )
             ui.label()
 
+            ui.label("Temp").classes(_lbl)
+            ui.icon("circle").style(f"{_dot_s} color: {_CLR_CUR};")
+            ui.label("-- °C").classes("text-sm").bind_text_from(
+                waldoctl.commander.status.tool,
+                "channels",
+                backward=lambda c: (
+                    f"{c[1]:.0f} °C"
+                    if len(c) > 1 and math.isfinite(c[1])
+                    else "-- °C"
+                ),
+            )
+
+            ui.label("Load").classes(_lbl)
+            ui.icon("circle").style(f"{_dot_s} color: {_CLR_POS};")
+            ui.label("-- raw").classes("text-sm").bind_text_from(
+                waldoctl.commander.status.tool,
+                "channels",
+                backward=lambda c: f"{c[2]:.0f} raw" if len(c) > 2 else "-- raw",
+            )
+
             ui.label("Engaged").classes(_lbl)
             self._engaged_dot = ui.icon("circle").style(
                 f"{_dot_s} color: var(--ctk-muted);"
@@ -494,6 +525,9 @@ class GripperPage:
             self._fault_label.set_visibility(False)
 
     def _build_controls_column(self) -> None:
+        ui.button("停止夹爪", icon="stop", on_click=self._stop_gripper).props(
+            "color=negative dense"
+        ).classes("w-full mb-2")
         with (
             ui.grid(columns="auto 100px 2rem")
             .classes("w-full gap-y-0 gap-x-4")

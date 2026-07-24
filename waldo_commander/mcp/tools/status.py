@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import waldoctl
 
 from waldo_commander.mcp.server import get_mcp
@@ -78,6 +80,13 @@ async def get_action_state() -> dict:
 async def get_tool_status() -> dict:
     """Active tool key + variant + live per-tool state (positions, currents)."""
     t = waldoctl.commander.status.tool
+    channels = list(t.channels)
+    temperature = (
+        channels[1]
+        if len(channels) > 1 and math.isfinite(channels[1])
+        else None
+    )
+    load_raw = channels[2] if len(channels) > 2 else None
     return {
         "key": t.key,
         "variant_key": t.variant_key,
@@ -86,7 +95,13 @@ async def get_tool_status() -> dict:
         "part_detected": t.part_detected,
         "fault_code": t.fault_code,
         "positions": list(t.positions),
-        "channels": list(t.channels),
+        "channels": channels,
+        "current_mA": channels[0] if t.key == "STS3215" and channels else None,
+        "force_available": False,
+        "force_n": None,
+        "temperature_available": temperature is not None,
+        "temperature_c": temperature,
+        "load_raw": load_raw,
     }
 
 

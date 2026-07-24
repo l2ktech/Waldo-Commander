@@ -5,20 +5,31 @@ from types import SimpleNamespace
 
 import pytest
 from waldo_commander.components import control
+from waldo_commander import main as commander_main
 from waldo_commander.components.playback import PlaybackController
 
 
 def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
-    assert control.ControlPanel.INCREMENTAL_MOVE_TIMEOUT_S == 30.0
-    assert control.ControlPanel.EXACT_MOVE_TIMEOUT_S == 30.0
+    assert control.ControlPanel.INCREMENTAL_MOVE_TIMEOUT_S == 120.0
+    assert control.ControlPanel.EXACT_MOVE_TIMEOUT_S == 120.0
 
 
 def test_zdt_speed_rating_spans_the_encodable_range() -> None:
-    assert control._normalized_speed(10, "parol6_zdt_backend") == pytest.approx(0.6)
-    assert control._normalized_speed(50, "parol6_zdt_backend") == pytest.approx(
-        0.7777777778
-    )
+    assert control._normalized_speed(10, "parol6_zdt_backend") == pytest.approx(0.1)
+    assert control._normalized_speed(50, "parol6_zdt_backend") == pytest.approx(0.5)
     assert control._normalized_speed(100, "parol6_zdt_backend") == pytest.approx(1.0)
+
+
+def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
+    assert commander_main._urdf_angle_signs("parol6_zdt_backend") == [
+        -1,
+        1,
+        1,
+        1,
+        1,
+        1,
+    ]
+    assert commander_main._urdf_angle_signs("parol6") == [1] * 6
 
 
 @pytest.mark.asyncio
@@ -216,6 +227,47 @@ async def test_cartesian_click_waits_for_safe_terminal_and_forwards_settings(
             "wait": True,
             "timeout": 30.0,
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cartesian_jog_failure_releases_button_and_notifies(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._movement_allowed = lambda **_kwargs: True
+    panel._cart_pressed_axes = {axis: axis == "X+" for axis in control._AXIS_ORDER}
+    panel._cart_axis_imgs = {"X+": object()}
+    panel._tcp_drag_active = False
+    panel._tcp_latest_pose = None
+    panel.STREAM_TIMEOUT_S = 0.1
+    panel.JOG_TICK_S = 0.02
+    panel.CADENCE_WARN_WINDOW = 10
+    panel.CADENCE_TOLERANCE = 0.1
+    panel._get_first_pressed_axis = lambda: "X+"
+    panel._get_cart_axis_lookup = lambda: {"X+": ("X", 1.0, "WRF")}
+    panel._apply_pressed_style = lambda *_args: None
+    panel._cart_cadence = SimpleNamespace(tick=lambda *_args: None)
+
+    async def jog_l(*_args, **_kwargs):
+        raise RuntimeError("current grant and lease are required")
+
+    panel.client = SimpleNamespace(jog_l=jog_l)
+    timer = SimpleNamespace(active=True)
+    monkeypatch.setattr(control.ui_state, "_cart_jog_timer", timer)
+    monkeypatch.setattr(control, "_norm_speed", lambda: 0.5)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 0.5)
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+    )
+
+    await panel.cart_jog_tick()
+
+    assert panel._cart_pressed_axes["X+"] is False
+    assert timer.active is False
+    assert notifications == [
+        ("笛卡尔点动失败：current grant and lease are required", "negative")
     ]
 
 

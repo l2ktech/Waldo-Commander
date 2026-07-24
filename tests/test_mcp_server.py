@@ -75,6 +75,78 @@ async def test_settings_tool_writes_propagate(user: User) -> None:
 
 
 @pytest.mark.integration
+async def test_mcp_gripper_direct_tools_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP can select and directly operate the STS3215 without a browser."""
+    from types import SimpleNamespace
+
+    from waldo_commander.services.control_lease import (
+        ControlMode,
+        control_lease,
+        set_control_mode,
+    )
+
+    calls: list[tuple] = []
+
+    async def _select_tool(key: str, variant_key: str = "") -> int:
+        calls.append(("select", key, variant_key))
+        return 1
+
+    async def _tool_action(
+        key: str,
+        action: str,
+        params: list | None = None,
+        *,
+        wait: bool = True,
+        timeout: float = 10.0,
+    ) -> int:
+        calls.append(("action", key, action, params or [], wait, timeout))
+        return 1
+
+    monkeypatch.setattr(
+        waldoctl.commander,
+        "client",
+        SimpleNamespace(select_tool=_select_tool, tool_action=_tool_action),
+    )
+    set_control_mode(ControlMode.AUTOPILOT)
+    waldoctl.commander.status.simulator_active = True
+
+    mcp = get_mcp()
+    try:
+        async with Client(mcp) as client:
+            await client.call_tool("control.take_control")
+            assert _payload(
+                await client.call_tool("tool.select", {"key": "STS3215"})
+            ) == {"accepted": True, "command_index": 1, "tool": "STS3215"}
+            assert _payload(await client.call_tool("tool.open"))["accepted"] is True
+            assert _payload(await client.call_tool("tool.close"))["accepted"] is True
+            assert _payload(
+                await client.call_tool(
+                    "tool.move",
+                    {
+                        "position": 0.25,
+                        "speed": 0.5,
+                        "current": 300,
+                        "wait": False,
+                        "timeout": 2.0,
+                    },
+                )
+            )["accepted"] is True
+            assert _payload(await client.call_tool("tool.stop"))["accepted"] is True
+
+        assert calls == [
+            ("select", "STS3215", ""),
+            ("action", "STS3215", "open", [], True, 10.0),
+            ("action", "STS3215", "close", [], True, 10.0),
+            ("action", "STS3215", "move", [0.25, 0.5, 300], False, 2.0),
+            ("action", "STS3215", "stop", [], True, 10.0),
+        ]
+    finally:
+        control_lease.reset()
+
+
+@pytest.mark.integration
 async def test_hardware_motion_needs_session_consent(user: User) -> None:
     """The Autopilot hardware floor: even with motion auto-approved, the first
     real move of an MCP session is refused until a human grants consent in the
