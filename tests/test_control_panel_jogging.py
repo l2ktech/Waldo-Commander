@@ -24,6 +24,22 @@ from tests.helpers.wait import (
 )
 
 
+@pytest.mark.parametrize("was_holding, expected_waits", [(False, 0), (True, 1)])
+def test_jog_release_waits_only_after_streaming_hold(
+    monkeypatch, was_holding: bool, expected_waits: int
+) -> None:
+    """Completed click moves must not race a second wait_motion request."""
+    from waldo_commander.components.control import ControlPanel
+
+    panel = ControlPanel.__new__(ControlPanel)
+    waits: list[None] = []
+    monkeypatch.setattr(panel, "_schedule_jog_end_wait", lambda: waits.append(None))
+
+    panel._finish_jog_release(was_holding)
+
+    assert len(waits) == expected_waits
+
+
 @pytest.mark.integration
 async def test_joint_jog_button_sends_jog_j(user: User) -> None:
     """Clicking a joint jog button should result in joint motion.

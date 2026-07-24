@@ -1374,8 +1374,6 @@ class ControlPanel:
         axis_info = f"J{j + 1}{sign}"
         if is_pressed:
             motion_recorder.on_jog_start("joint", axis_info)
-        else:
-            self._schedule_jog_end_wait()
 
         target_btn = (
             self._joint_right_btns.get(j)
@@ -1436,6 +1434,7 @@ class ControlPanel:
         def on_release(was_holding: bool):
             _set_pressed(False)
             _sync_timer()
+            self._finish_jog_release(was_holding)
 
         await self._joint_click_hold.on_change(
             key,
@@ -1482,8 +1481,6 @@ class ControlPanel:
 
         if is_pressed:
             motion_recorder.on_jog_start("cartesian", axis)
-        else:
-            self._schedule_jog_end_wait()
 
         # Check enablement: translation uses WRF, rotation uses TRF
         frames = ui_state.active_robot.cartesian_frames
@@ -1548,6 +1545,7 @@ class ControlPanel:
         def on_release(was_holding: bool):
             self._cart_pressed_axes[axis] = False
             _sync_timer()
+            self._finish_jog_release(was_holding)
 
         await self._cart_click_hold.on_change(
             axis,
@@ -1693,6 +1691,11 @@ class ControlPanel:
         if self._jog_end_wait_task is not None and not self._jog_end_wait_task.done():
             self._jog_end_wait_task.cancel()
         self._jog_end_wait_task = asyncio.create_task(self._wait_and_record_jog_end())
+
+    def _finish_jog_release(self, was_holding: bool) -> None:
+        """Wait only after streamed jogs; click moves already wait synchronously."""
+        if was_holding:
+            self._schedule_jog_end_wait()
 
     async def _wait_and_record_jog_end(self) -> None:
         """Wait for robot motion to stop, then record the jog end position."""
