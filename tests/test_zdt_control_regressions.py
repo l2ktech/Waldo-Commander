@@ -13,8 +13,12 @@ def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
     assert control.ControlPanel.EXACT_MOVE_TIMEOUT_S == 30.0
 
 
-def test_zdt_speed_is_clamped_to_encodable_floor() -> None:
-    assert control._normalized_speed(1, "parol6_zdt_backend") == 0.6
+def test_zdt_speed_rating_spans_the_encodable_range() -> None:
+    assert control._normalized_speed(10, "parol6_zdt_backend") == pytest.approx(0.6)
+    assert control._normalized_speed(50, "parol6_zdt_backend") == pytest.approx(
+        0.7777777778
+    )
+    assert control._normalized_speed(100, "parol6_zdt_backend") == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -37,13 +41,60 @@ async def test_incremental_moves_reject_overlapping_clicks() -> None:
     await asyncio.sleep(0)
 
     assert calls == 1
-
     await second
     assert calls == 1
 
     release.set()
     await first
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = asyncio.Lock()
+
+    class UiClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    panel._ui_client = UiClient()
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+    )
+
+    async def operation() -> None:
+        raise RuntimeError("IK target is unreachable")
+
+    await panel._run_incremental_move("cart", operation)
+
+    assert notifications == [("笛卡尔动作失败：IK target is unreachable", "negative")]
+
+
+def test_joint_direction_availability_matches_backend_status(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    monkeypatch.setattr(
+        control.waldoctl,
+        "commander",
+        SimpleNamespace(
+            status=SimpleNamespace(
+                joints=SimpleNamespace(
+                    can_jog_pos=[False, True, True, True, True, True],
+                    can_jog_neg=[True] * 6,
+                )
+            )
+        ),
+    )
+
+    assert panel._joint_direction_available(0, "pos") is False
+    assert panel._joint_direction_available(0, "neg") is True
+    assert panel._joint_direction_available(8, "pos") is False
 
 
 @pytest.mark.asyncio
@@ -66,6 +117,7 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
         ),
     )
     monkeypatch.setattr(control, "_norm_speed", lambda: 0.6)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 0.4)
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -74,10 +126,11 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
     refreshes = 0
 
     async def move_j(
-        target: list[float], *, speed: float, wait: bool, timeout: float
+        target: list[float], *, speed: float, accel: float, wait: bool, timeout: float
     ) -> None:
         assert wait is True
         assert timeout == 30.0
+        assert accel == 0.4
         targets.append(target)
         started.set()
         await release.wait()
@@ -98,6 +151,97 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
 
     assert targets == [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
     assert refreshes == 1
+
+
+@pytest.mark.asyncio
+async def test_cartesian_click_waits_for_safe_terminal_and_forwards_settings(
+    monkeypatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = asyncio.Lock()
+    panel._movement_allowed = lambda **_kwargs: True
+    panel._cart_pressed_axes = {axis: False for axis in control._AXIS_ORDER}
+    panel._cart_axis_imgs = {}
+    panel._apply_pressed_style = lambda *_args: None
+    panel._set_strong_disabled = lambda *_args: None
+    panel._finish_jog_release = lambda *_args: None
+    panel.INCREMENTAL_MOVE_TIMEOUT_S = 30.0
+    panel.client = SimpleNamespace()
+
+    class ClickHandler:
+        async def on_change(self, _key, is_pressed, *, on_click, **_kwargs):
+            if not is_pressed:
+                await on_click()
+
+    panel._cart_click_hold = ClickHandler()
+    panel._ui_client = None
+    calls: list[dict] = []
+
+    async def move_l(pose, **kwargs):
+        calls.append({"pose": pose, **kwargs})
+
+    panel.client.move_l = move_l
+    monkeypatch.setattr(control, "_norm_speed", lambda: 0.8)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 0.4)
+    monkeypatch.setattr(
+        control.waldoctl,
+        "commander",
+        SimpleNamespace(
+            status=SimpleNamespace(
+                editing_mode=False,
+                pose=SimpleNamespace(cart_jog=SimpleNamespace(by_frame={})),
+            ),
+            settings=SimpleNamespace(jog=SimpleNamespace(joint_step_deg=2.0)),
+        ),
+    )
+    monkeypatch.setattr(
+        control.ui_state,
+        "robot",
+        SimpleNamespace(cartesian_frames=["WRF", "TRF"]),
+    )
+    monkeypatch.setattr(
+        control.ui_state, "_cart_jog_timer", SimpleNamespace(active=False)
+    )
+    monkeypatch.setattr(control.motion_recorder, "on_jog_start", lambda *_args: None)
+
+    await panel.set_axis_pressed("X+", False)
+
+    assert calls == [
+        {
+            "pose": [2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "frame": "WRF",
+            "speed": 0.8,
+            "accel": 0.4,
+            "rel": True,
+            "wait": True,
+            "timeout": 30.0,
+        }
+    ]
+
+
+def test_tcp_drag_starts_from_current_pose_to_avoid_zero_motion(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._movement_allowed = lambda **_kwargs: True
+    panel._tcp_drag_active = False
+    panel._tcp_last_sent_pose = None
+    panel._cart_cadence = SimpleNamespace(reset=lambda: None)
+    monkeypatch.setattr(
+        control.ui_state, "_cart_jog_timer", SimpleNamespace(active=False)
+    )
+    monkeypatch.setattr(
+        control.waldoctl,
+        "commander",
+        SimpleNamespace(
+            status=SimpleNamespace(
+                pose=SimpleNamespace(x=1.0, y=2.0, z=3.0, rx=4.0, ry=5.0, rz=6.0)
+            )
+        ),
+    )
+    monkeypatch.setattr(control.motion_recorder, "on_jog_start", lambda *_args: None)
+
+    panel._handle_tcp_cartesian_move_start()
+
+    assert panel._tcp_last_sent_pose == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
 def test_playback_cleanup_cancels_page_timer() -> None:

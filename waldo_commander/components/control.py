@@ -586,7 +586,11 @@ def _safe_task(coro: Any) -> asyncio.Task:
 def _normalized_speed(speed_percent: float, backend_package: str) -> float:
     normalized = max(0.01, min(1.0, speed_percent / 100.0))
     if backend_package == "parol6_zdt_backend":
-        return max(0.6, normalized)
+        # The ZDT backend can encode only 0.6..1.0.  Map Waldo's ten visible
+        # rating steps (10%..100%) across that whole range so every step has
+        # an observable effect instead of collapsing the first six to 0.6.
+        rating_normalized = max(0.1, normalized)
+        return 0.6 + ((rating_normalized - 0.1) / 0.9) * 0.4
     return normalized
 
 
@@ -750,6 +754,15 @@ class ControlPanel:
                 await operation()
             except Exception as error:
                 logger.error("Incremental %s move failed: %s", label, error)
+                ui_client = getattr(self, "_ui_client", None)
+                if ui_client is not None:
+                    display = "关节" if label == "joint" else "笛卡尔"
+                    with ui_client:
+                        ui.notify(
+                            f"{display}动作失败：{error}",
+                            color="negative",
+                            timeout=4000,
+                        )
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
         """Build cartesian axis lookup from the active robot's frame names.
@@ -1376,11 +1389,26 @@ class ControlPanel:
 
     # ---- Joint jog methods ----
 
+    @staticmethod
+    def _joint_direction_available(joint_index: int, direction: str) -> bool:
+        joints = waldoctl.commander.status.joints
+        values = joints.can_jog_pos if direction == "pos" else joints.can_jog_neg
+        return 0 <= joint_index < len(values) and bool(values[joint_index])
+
     async def set_joint_pressed(self, j: int, direction: str, is_pressed: bool) -> None:
         """Hybrid click/hold: quick click => single step, press-and-hold => stream until release."""
         if waldoctl.commander.status.editing_mode:
             return
         if not self._movement_allowed(notify=is_pressed):
+            return
+        if is_pressed and not self._joint_direction_available(j, direction):
+            target = (
+                self._joint_right_btns.get(j)
+                if direction == "pos"
+                else self._joint_left_btns.get(j)
+            )
+            self._set_strong_disabled(target, True)
+            ui.notify("该关节方向当前不可用或已到软限位", color="warning")
             return
         assert self._joint_click_hold is not None
 
@@ -1475,6 +1503,16 @@ class ControlPanel:
             intent = self._get_first_pressed_joint()
             if intent is not None:
                 j, d = intent
+                if not self._joint_direction_available(j, d):
+                    if d == "pos":
+                        self._jog_pressed_pos[j] = False
+                    else:
+                        self._jog_pressed_neg[j] = False
+                    ui_state.joint_jog_timer.active = bool(
+                        any(self._jog_pressed_pos) or any(self._jog_pressed_neg)
+                    )
+                    self._finish_jog_release(True)
+                    return
                 signed_speed = speed if d == "pos" else -speed
                 await self.client.jog_j(
                     j,
@@ -1551,6 +1589,8 @@ class ControlPanel:
                         speed=speed,
                         accel=_norm_accel(),
                         rel=True,
+                        wait=True,
+                        timeout=self.INCREMENTAL_MOVE_TIMEOUT_S,
                     )
 
             await self._run_incremental_move("cart", move)
@@ -1658,7 +1698,15 @@ class ControlPanel:
         if not self._movement_allowed(notify=False):
             return
 
-        self._tcp_last_sent_pose = None
+        pose = waldoctl.commander.status.pose
+        self._tcp_last_sent_pose = [
+            float(pose.x),
+            float(pose.y),
+            float(pose.z),
+            float(pose.rx),
+            float(pose.ry),
+            float(pose.rz),
+        ]
 
         if not self._tcp_drag_active:
             self._tcp_drag_active = True
@@ -1754,6 +1802,7 @@ class ControlPanel:
             await self.client.move_j(
                 pose,
                 speed=spd,
+                accel=_norm_accel(),
                 wait=True,
                 timeout=self.EXACT_MOVE_TIMEOUT_S,
             )
