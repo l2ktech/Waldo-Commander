@@ -605,6 +605,17 @@ def _norm_accel() -> float:
     return waldoctl.commander.settings.jog.accel / 100.0
 
 
+def _is_operator_stop_terminal(error: Exception) -> bool:
+    message = str(error)
+    return (
+        "official motion returned before admission" in message
+        or (
+            "OPERATOR_STOP_CONFIRMED" in message
+            and ("CANCELLED" in message or "CONFIRMED_STOPPED" in message)
+        )
+    )
+
+
 class ControlPanel:
     """Bottom-left control panel for jog settings and robot control."""
 
@@ -751,6 +762,9 @@ class ControlPanel:
             try:
                 await operation()
             except Exception as error:
+                if _is_operator_stop_terminal(error):
+                    logger.info("Incremental %s move stopped by operator", label)
+                    return
                 logger.error("Incremental %s move failed: %s", label, error)
                 ui_client = getattr(self, "_ui_client", None)
                 if ui_client is not None:

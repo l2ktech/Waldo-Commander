@@ -88,6 +88,28 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
     assert notifications == [("笛卡尔动作失败：IK target is unreachable", "negative")]
 
 
+@pytest.mark.asyncio
+async def test_operator_stop_during_admission_is_not_reported_as_motion_failure(
+    monkeypatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = asyncio.Lock()
+    panel._ui_client = None
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+    )
+
+    async def operation() -> None:
+        raise RuntimeError("official motion returned before admission")
+
+    await panel._run_incremental_move("joint", operation)
+
+    assert notifications == []
+
+
 def test_joint_direction_availability_matches_backend_status(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     monkeypatch.setattr(
