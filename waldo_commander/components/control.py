@@ -580,9 +580,19 @@ def _safe_task(coro: Any) -> asyncio.Task:
     return task
 
 
+def _normalized_speed(speed_percent: float, backend_package: str) -> float:
+    normalized = max(0.01, min(1.0, speed_percent / 100.0))
+    if backend_package == "parol6_zdt_backend":
+        return max(0.6, normalized)
+    return normalized
+
+
 def _norm_speed() -> float:
-    """Normalize jog_speed (0-100 slider) to 0.01..1.0 range."""
-    return max(0.01, min(1.0, waldoctl.commander.settings.jog.speed / 100.0))
+    """Normalize jog speed and honor the active backend's encodable floor."""
+    return _normalized_speed(
+        waldoctl.commander.settings.jog.speed,
+        ui_state.active_robot.backend_package,
+    )
 
 
 def _norm_accel() -> float:
@@ -650,6 +660,7 @@ class ControlPanel:
         self.CLICK_HOLD_THRESHOLD_S: float = CLICK_HOLD_THRESHOLD_S
         self._joint_click_hold: _ClickHoldHandler | None = None
         self._cart_click_hold: _ClickHoldHandler | None = None
+        self._incremental_move_lock = asyncio.Lock()
 
         # Settings content for cleanup
         self._settings_content: "SettingsContent | None" = None
@@ -710,6 +721,21 @@ class ControlPanel:
         self._jog_end_wait_task: asyncio.Task | None = None
 
     # ---- Helper methods ----
+
+    async def _run_incremental_move(
+        self,
+        label: str,
+        operation: Callable[[], Any],
+    ) -> None:
+        """Coalesce rapid clicks so one execution session owns authority at a time."""
+        if self._incremental_move_lock.locked():
+            logger.debug("Ignoring overlapping incremental %s move", label)
+            return
+        async with self._incremental_move_lock:
+            try:
+                await operation()
+            except Exception as error:
+                logger.error("Incremental %s move failed: %s", label, error)
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
         """Build cartesian axis lookup from the active robot's frame names.
@@ -1385,10 +1411,10 @@ class ControlPanel:
             ui_state.joint_jog_timer.active = bool(any_pressed)
 
         async def on_click():
-            speed = _norm_speed()
-            accel = _norm_accel()
-            step = abs(float(waldoctl.commander.settings.jog.joint_step_deg))
-            try:
+            async def move() -> None:
+                speed = _norm_speed()
+                accel = _norm_accel()
+                step = abs(float(waldoctl.commander.settings.jog.joint_step_deg))
                 angles = list(waldoctl.commander.status.joints.angles.deg)
                 if len(angles) >= self._n_joints:
                     target_angles = angles[: self._n_joints]
@@ -1398,8 +1424,8 @@ class ControlPanel:
                     else:
                         target_angles[j] = max(lo, target_angles[j] - step)
                     await self.client.move_j(target_angles, speed=speed, accel=accel)
-            except Exception as e:
-                logger.error("Incremental joint move failed: %s", e)
+
+            await self._run_incremental_move("joint", move)
 
         def on_hold_start():
             _set_pressed(True)
@@ -1486,11 +1512,12 @@ class ControlPanel:
                 t.active = bool(any_pressed)
 
         async def on_click():
-            speed = _norm_speed()
-            step = max(
-                0.1, min(100.0, float(waldoctl.commander.settings.jog.joint_step_deg))
-            )
-            try:
+            async def move() -> None:
+                speed = _norm_speed()
+                step = max(
+                    0.1,
+                    min(100.0, float(waldoctl.commander.settings.jog.joint_step_deg)),
+                )
                 axis_letter = axis.rstrip("+-")
                 direction = 1.0 if axis.endswith("+") else -1.0
                 is_rotation = axis_letter.startswith("R")
@@ -1507,8 +1534,8 @@ class ControlPanel:
                         accel=_norm_accel(),
                         rel=True,
                     )
-            except Exception as e:
-                logger.error("Incremental cart move failed: %s", e)
+
+            await self._run_incremental_move("cart", move)
 
         def on_hold_start():
             self._cart_pressed_axes[axis] = True
