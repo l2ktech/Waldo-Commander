@@ -272,7 +272,10 @@ def _run_simulation_isolated(
         from waldo_commander.profiles import get_robot
         from waldoctl import shape_from_wire
 
-        _preview_robot = get_robot(backend_package)
+        robot_backend = (
+            "parol6_zdt" if backend_package == "parol6_zdt_backend" else backend_package
+        )
+        _preview_robot = get_robot(robot_backend)
         if _preview_robot.has_collision_checking:
             _preview_robot.apply_shapes(
                 [shape_from_wire(*t) for t in shapes_wire or []]
@@ -587,7 +590,9 @@ class PathVisualizer:
             # Live homed state seeds the preview so it mirrors the controller's
             # planned-motion gate: an unhomed robot's preview refuses planned
             # moves until the script homes.
-            initial_homed = robot_state.homed
+            initial_homed = (
+                robot_state.homed or backend_pkg == "parol6_zdt_backend"
+            )
 
             try:
                 result = await asyncio.wait_for(

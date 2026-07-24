@@ -186,7 +186,13 @@ class SteppingClientWrapper:
     - Blended commands (r > 0) are grouped as a single step
     """
 
-    def __init__(self, wrapped_client: Any, step_io: StepIO) -> None:
+    def __init__(
+        self,
+        wrapped_client: Any,
+        step_io: StepIO,
+        *,
+        wait_after_command: bool = True,
+    ) -> None:
         """
         Initialize the wrapper.
 
@@ -196,15 +202,21 @@ class SteppingClientWrapper:
         """
         self._wrapped = wrapped_client
         self._step_io = step_io
+        self._wait_after_command = wait_after_command
         self._in_blend = False
         self._last_blend_index: int = -1
+
+    def _wait_command(self, command_index: int) -> None:
+        """Wait for queued backends; synchronous backends already returned terminally."""
+        if self._wait_after_command and command_index >= 0:
+            self._wrapped.wait_command(command_index)
 
     def _flush_blend(self) -> None:
         """Flush any pending blend group, emit events, and pause if stepping."""
         if not self._in_blend:
             return
         if self._last_blend_index >= 0:
-            self._wrapped.wait_command(self._last_blend_index)
+            self._wait_command(self._last_blend_index)
         self._in_blend = False
         self._last_blend_index = -1
         self._step_io.emit_event("complete", "blend_group")
@@ -227,7 +239,7 @@ class SteppingClientWrapper:
             # Only wait/complete if not exiting due to an exception
             if args[0] is None:
                 if self._last_blend_index >= 0:
-                    self._wrapped.wait_command(self._last_blend_index)
+                    self._wait_command(self._last_blend_index)
                 self._step_io.emit_event("complete", "blend_group")
                 self._step_io.increment_step_count()
             self._in_blend = False
@@ -272,7 +284,7 @@ class SteppingClientWrapper:
             # Non-blended command — flush any pending blend group first
             if self._in_blend:
                 if self._last_blend_index >= 0:
-                    self._wrapped.wait_command(self._last_blend_index)
+                    self._wait_command(self._last_blend_index)
                 self._in_blend = False
                 self._last_blend_index = -1
                 self._step_io.emit_event("complete", "blend_group")
@@ -283,7 +295,7 @@ class SteppingClientWrapper:
             result = method(*args, **kwargs)
 
             if isinstance(result, int) and result >= 0:
-                self._wrapped.wait_command(result)
+                self._wait_command(result)
 
             self._step_io.emit_event("complete", name)
             self._step_io.increment_step_count()

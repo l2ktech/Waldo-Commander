@@ -47,19 +47,34 @@ def main() -> None:
 
     # Set by the GUI process.
     backend_package = os.environ.get("WALDO_BACKEND_PACKAGE", "parol6")
+    robot_backend = os.environ.get("WALDO_ROBOT_BACKEND", backend_package)
 
     try:
         backend = importlib.import_module(backend_package)
         OriginalRobotClient = backend.RobotClient
 
-        _original_robot_client = OriginalRobotClient
+        if backend_package == "parol6_zdt_backend":
+            from waldoctl.discovery import get_robot
+
+            robot = get_robot(robot_backend)
+
+            def _create_client(*_args, **_kwargs):
+                return robot.create_sync_client()
+
+        else:
+            def _create_client(*args, **kwargs):
+                return OriginalRobotClient(*args, **kwargs)
 
         class WrappedRobotClient:
             """RobotClient replacement that wraps with SteppingClientWrapper."""
 
             def __new__(cls, *args, **kwargs):
-                original = _original_robot_client(*args, **kwargs)
-                return SteppingClientWrapper(original, step_io)
+                original = _create_client(*args, **kwargs)
+                return SteppingClientWrapper(
+                    original,
+                    step_io,
+                    wait_after_command=backend_package != "parol6_zdt_backend",
+                )
 
         setattr(backend, "RobotClient", WrappedRobotClient)
         if hasattr(backend, "client"):

@@ -41,6 +41,14 @@ def get_home_joints_rad() -> list[float]:
 def default_python_snippet() -> str:
     """Initial pre-filled Python code with inlined controller host/port."""
     backend = ui_state.active_robot.backend_package
+    if backend == "parol6_zdt_backend":
+        return f"""from {backend} import RobotClient
+
+rbt = RobotClient()
+status = rbt.status()
+print(f"Robot status: {{status}}")
+rbt.close()
+"""
     return f"""import time
 from {backend} import RobotClient
 

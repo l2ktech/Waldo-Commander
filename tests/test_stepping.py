@@ -252,6 +252,30 @@ class TestSteppingClientWrapper:
         event_file = tmp_path / ".parol_events_test_passthrough"
         assert not event_file.exists()
 
+    def test_sync_backend_skips_duplicate_wait(self, tmp_path, monkeypatch):
+        """A backend whose motion call is terminal must not be waited twice."""
+        from waldo_commander.services.stepping_client import (
+            StepIO,
+            SteppingClientWrapper,
+        )
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+        mock_client = MagicMock()
+        mock_client.move_j = MagicMock(return_value=42)
+        mock_client.wait_command = MagicMock()
+        control_file = tmp_path / ".parol_control_test_sync_backend"
+        control_file.write_text(json.dumps({"paused": False, "step_signal": 0}))
+
+        wrapper = SteppingClientWrapper(
+            mock_client,
+            StepIO("test_sync_backend"),
+            wait_after_command=False,
+        )
+
+        assert wrapper.move_j([0, 0, 0, 0, 0, 0]) == 42
+        mock_client.wait_command.assert_not_called()
+
     def test_motion_methods_list_is_correct(self):
         """STEPPABLE_METHODS contains expected robot motion commands."""
         from waldo_commander.services.stepping_client import STEPPABLE_METHODS

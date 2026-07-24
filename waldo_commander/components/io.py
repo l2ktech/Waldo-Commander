@@ -24,6 +24,19 @@ class IoPage:
             return
         try:
             await self.client.write_io(index, state)
+            outputs = list(waldoctl.commander.status.io.outputs)
+            if index < len(outputs):
+                outputs[index] = int(state)
+                waldoctl.commander.status.io.outputs = outputs
+            fresh_io = await self.client.io()
+            if fresh_io is not None:
+                n_in = ui_state.active_robot.digital_inputs
+                n_out = ui_state.active_robot.digital_outputs
+                waldoctl.commander.status.io.inputs = list(fresh_io[:n_in])
+                waldoctl.commander.status.io.outputs = list(
+                    fresh_io[n_in : n_in + n_out]
+                )
+                waldoctl.commander.status.io.estop = int(fresh_io[n_in + n_out])
             motion_recorder.record_action("io", port=index, state=state)
             logger.info("OUTPUT%s -> %s", index + 1, "HIGH" if state else "LOW")
         except Exception as e:

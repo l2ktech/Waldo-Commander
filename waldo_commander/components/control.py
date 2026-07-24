@@ -422,7 +422,7 @@ class _ToolQuickActions:
         try:
             if isinstance(tool, GripperTool):
                 spd_kwargs: dict = {}
-                if isinstance(tool, ElectricGripperTool):
+                if isinstance(tool, ElectricGripperTool) and tool.key != "STS3215":
                     spd_kwargs["speed"] = waldoctl.commander.settings.jog.speed / 100.0
                     spd_kwargs["current"] = waldoctl.commander.settings.gripper.current
                 _cur_pos = waldoctl.commander.status.tool.position
@@ -2500,9 +2500,9 @@ class ControlPanel:
                 self._step_input = (
                     ui.number(
                         value=waldoctl.commander.settings.jog.joint_step_deg,
-                        min=1,
+                        min=0.1,
                         max=100.0,
-                        step=1,
+                        step=0.1,
                         format="%.1f",
                         suffix="°",
                     )

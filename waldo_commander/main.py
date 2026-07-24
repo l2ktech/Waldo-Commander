@@ -1076,6 +1076,12 @@ def _register_handlers() -> None:
     if ng_app.is_started:
         return
 
+    skip_startup_commands = os.environ.get(
+        "WALDO_SKIP_STARTUP_COMMANDS", ""
+    ).lower() in ("1", "true", "yes", "on") or os.environ.get(
+        "WALDO_READ_ONLY", ""
+    ).lower() in ("1", "true", "yes", "on")
+
     async def _init_and_wait(port: str) -> None:
         """Start controller and wait for readiness."""
         if not controller_state.running:
@@ -1094,8 +1100,8 @@ def _register_handlers() -> None:
         in ``_init`` will set ``waldoctl.commander.status.simulator_active`` based on
         whether hardware is actually connected.
         """
-        if os.environ.get("WALDO_READ_ONLY", "").lower() in ("1", "true", "yes", "on"):
-            logger.info("Read-only mode: skipping simulator/reset startup commands")
+        if skip_startup_commands:
+            logger.info("Skipping simulator/reset startup commands")
             return
         if not port:
             try:
@@ -1110,8 +1116,8 @@ def _register_handlers() -> None:
 
     async def _restore_settings() -> None:
         """Restore persisted motion profile and tool selection."""
-        if os.environ.get("WALDO_READ_ONLY", "").lower() in ("1", "true", "yes", "on"):
-            logger.info("Read-only mode: skipping profile/tool startup commands")
+        if skip_startup_commands:
+            logger.info("Skipping profile/tool startup commands")
             return
         try:
             saved_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")

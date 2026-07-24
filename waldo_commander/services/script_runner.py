@@ -88,6 +88,11 @@ async def run_script(
     from waldo_commander.state import ui_state
 
     env["WALDO_BACKEND_PACKAGE"] = ui_state.active_robot.backend_package
+    env["WALDO_ROBOT_BACKEND"] = (
+        "parol6_zdt"
+        if ui_state.active_robot.backend_package == "parol6_zdt_backend"
+        else ui_state.active_robot.backend_package
+    )
 
     if session_id:
         # Bootstrap script injects the stepping wrapper around the user script.
