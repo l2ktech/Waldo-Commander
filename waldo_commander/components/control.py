@@ -604,6 +604,7 @@ class ControlPanel:
     """Bottom-left control panel for jog settings and robot control."""
 
     INCREMENTAL_MOVE_TIMEOUT_S = 30.0
+    EXACT_MOVE_TIMEOUT_S = 30.0
 
     def __init__(self, client: RobotClient) -> None:
         """Initialize control panel with jog state and required robot client."""
@@ -1728,20 +1729,22 @@ class ControlPanel:
 
     async def move_joint_to_angle(self, joint_index: int, target_deg: float) -> None:
         """Move a single joint to the specified angle (deg) while holding others."""
-        if not self._movement_allowed():
-            return
-
-        try:
+        async def move() -> None:
+            if not self._movement_allowed():
+                return
             angles = list(waldoctl.commander.status.joints.angles.deg)
             lo, hi = self._get_joint_limits(joint_index)
             tgt = max(lo, min(hi, float(target_deg)))
             pose = angles[: self._n_joints]
             pose[joint_index] = tgt
             spd = _norm_speed()
+            await self.client.move_j(
+                pose,
+                speed=spd,
+                timeout=self.EXACT_MOVE_TIMEOUT_S,
+            )
 
-            await self.client.move_j(pose, speed=spd)
-        except Exception as e:
-            logger.error("Go to joint angle failed: %s", e)
+        await self._run_incremental_move("joint", move)
 
     async def go_to_joint_limit(self, joint_index: int, which: str) -> None:
         """Move to min or max joint limit for a specific joint while holding others."""
@@ -2012,7 +2015,11 @@ class ControlPanel:
                                     .style("min-width: 3rem; text-align: right;")
                                 )
 
-                            _num_ref: dict[str, Any] = {"focused": False, "el": num}
+                            _num_ref: dict[str, Any] = {
+                                "focused": False,
+                                "el": num,
+                                "suppress_blur_submit": False,
+                            }
 
                             def _num_backward(a, i=idx, r=_num_ref) -> float | None:
                                 if r["focused"]:
@@ -2050,7 +2057,7 @@ class ControlPanel:
                                 backward=_spd_backward,
                             )
 
-                            def _submit_exact(e=None, i=idx, n=num):
+                            def _submit_exact(i=idx, n=num):
                                 try:
                                     val = (
                                         float(n.value) if n.value is not None else None
@@ -2060,8 +2067,25 @@ class ControlPanel:
                                 if val is not None:
                                     _safe_task(self.move_joint_to_angle(i, val))
 
-                            num.on("blur", _submit_exact)
-                            num.on("keydown.enter", _submit_exact)
+                            def _submit_blur(_e=None, r=_num_ref):
+                                r["focused"] = False
+                                if r["suppress_blur_submit"]:
+                                    r["suppress_blur_submit"] = False
+                                    return
+                                _submit_exact()
+
+                            def _submit_enter(_e=None, n=num, r=_num_ref):
+                                # Enter commits once, then releases focus so live
+                                # hardware readback can replace the edited value.
+                                # The resulting blur event must not submit a second
+                                # overlapping MoveJ.
+                                r["focused"] = False
+                                r["suppress_blur_submit"] = True
+                                _submit_exact()
+                                n.run_method("blur")
+
+                            num.on("blur", _submit_blur)
+                            num.on("keydown.enter", _submit_enter)
 
                             # Left minus pill
                             left_btn = (
