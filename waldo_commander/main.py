@@ -1332,6 +1332,33 @@ def _cleanup_script_processes_sync() -> None:
 atexit.register(_cleanup_script_processes_sync)
 
 
+def _cleanup_page_resources(page_client: Client) -> None:
+    """Cancel timers and listeners before an active page is replaced."""
+    global _page_state
+
+    page_state = _page_state
+    if page_state is None or page_state.page_client is not page_client:
+        return
+
+    if page_state.ping_timer is not None:
+        page_state.ping_timer.cancel()
+    if ui_state._joint_jog_timer is not None:
+        ui_state._joint_jog_timer.cancel()
+        ui_state._joint_jog_timer = None
+    if ui_state._cart_jog_timer is not None:
+        ui_state._cart_jog_timer.cancel()
+        ui_state._cart_jog_timer = None
+
+    if control_panel is not None:
+        control_panel.cleanup()
+    if ui_state.gripper_page is not None:
+        ui_state.gripper_page.cleanup()
+    if editor_panel is not None:
+        editor_panel.cleanup()
+
+    _page_state = None
+
+
 def _build_takeover_overlay(message: str) -> None:
     """Render the takeover overlay: scrim + glass card + wandering sad robot.
 
@@ -1427,8 +1454,8 @@ async def index_page(takeover: str | None = None):
     if is_takeover:
         if held_id is not None:
             control_lease.release(BROWSER, held_id)
-        if editor_panel is not None:
-            editor_panel.cleanup()
+        if _page_state is not None:
+            _cleanup_page_resources(_page_state.page_client)
         ui_state.active_client_id = this_client.id
         _pending_takeover_token = None
     elif held_id is None or held_id not in Client.instances:
@@ -1453,9 +1480,7 @@ async def index_page(takeover: str | None = None):
         # listeners, timers, or script-watch tasks — _on_disconnect is
         # registered before the shadow `return`, so shadow tabs reach here.
         if _page_state is not None and _page_state.page_client is this_client:
-            _page_state = None
-            if editor_panel is not None:
-                editor_panel.cleanup()
+            _cleanup_page_resources(this_client)
 
     this_client.on_disconnect(_on_disconnect)
 

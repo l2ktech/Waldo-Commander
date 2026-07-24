@@ -263,6 +263,9 @@ class PlaybackController:
         """Remove listeners and cancel any async tasks owned by this controller."""
         simulation_state.remove_change_listener(self._on_state_change)
         simulation_state.remove_step_listener(self._on_step_change)
+        if self._sim_timer is not None:
+            self._sim_timer.cancel()
+            self._sim_timer = None
         if self._teleport_task and not self._teleport_task.done():
             self._teleport_task.cancel()
             self._teleport_task = None
