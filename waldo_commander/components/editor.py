@@ -82,6 +82,7 @@ class EditorPanel(FileOperationsMixin):
 
         # Debounce for tab-switch path rendering
         self._tab_switch_render_task: asyncio.Task | None = None
+        self._position_watch_timer: ui.timer | None = None
 
     def _insert_command(self, method_name: str) -> None:
         """Build a snippet for ``method_name`` (pre-filled with the robot's
@@ -350,6 +351,12 @@ class EditorPanel(FileOperationsMixin):
         if self._tab_switch_render_task is not None:
             self._tab_switch_render_task.cancel()
             self._tab_switch_render_task = None
+        if self._position_watch_timer is not None:
+            try:
+                self._position_watch_timer.cancel(with_current_invocation=True)
+            except TypeError:
+                self._position_watch_timer.cancel()
+            self._position_watch_timer = None
         self.playback.cleanup()
         decorations.cleanup()
         log_panel.cleanup()
@@ -913,7 +920,9 @@ class EditorPanel(FileOperationsMixin):
         script_exec.set_ui_client(ui_client)
 
         # Periodic check: re-run path preview when robot position changes
-        ui.timer(1.0, simulation.check_position_changed)
+        self._position_watch_timer = ui.timer(
+            1.0, simulation.check_position_changed
+        )
 
         with (
             ui.column()

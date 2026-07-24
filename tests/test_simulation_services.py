@@ -1698,6 +1698,20 @@ def test_editor_panel_cleanup_is_idempotent():
     panel.cleanup()  # second call must not raise
 
 
+def test_editor_panel_cleanup_cancels_position_watch_timer():
+    """Disconnecting a page must stop its repeating position watcher."""
+    from waldo_commander.components.editor import EditorPanel
+
+    timer = MagicMock()
+    panel = EditorPanel()
+    panel._position_watch_timer = timer
+
+    panel.cleanup()
+
+    timer.cancel.assert_called_once_with(with_current_invocation=True)
+    assert panel._position_watch_timer is None
+
+
 # ============================================================================
 # Per-tab log routing
 # ============================================================================
