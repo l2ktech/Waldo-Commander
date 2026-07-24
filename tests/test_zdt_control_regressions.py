@@ -64,13 +64,24 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
     release = asyncio.Event()
     targets: list[list[float]] = []
 
-    async def move_j(target: list[float], *, speed: float, timeout: float) -> None:
+    refreshes = 0
+
+    async def move_j(
+        target: list[float], *, speed: float, wait: bool, timeout: float
+    ) -> None:
+        assert wait is True
         assert timeout == 30.0
         targets.append(target)
         started.set()
         await release.wait()
 
+    async def angles() -> list[float]:
+        nonlocal refreshes
+        refreshes += 1
+        return targets[-1]
+
     panel.client.move_j = move_j
+    panel.client.angles = angles
     first = asyncio.create_task(panel.move_joint_to_angle(0, 1.0))
     await started.wait()
     await panel.move_joint_to_angle(0, 2.0)
@@ -78,3 +89,4 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
     await first
 
     assert targets == [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+    assert refreshes == 1

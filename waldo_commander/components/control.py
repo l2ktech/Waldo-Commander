@@ -1428,8 +1428,10 @@ class ControlPanel:
                         target_angles,
                         speed=speed,
                         accel=accel,
+                        wait=True,
                         timeout=self.INCREMENTAL_MOVE_TIMEOUT_S,
                     )
+                    await self.client.angles()
 
             await self._run_incremental_move("joint", move)
 
@@ -1741,8 +1743,10 @@ class ControlPanel:
             await self.client.move_j(
                 pose,
                 speed=spd,
+                wait=True,
                 timeout=self.EXACT_MOVE_TIMEOUT_S,
             )
+            await self.client.angles()
 
         await self._run_incremental_move("joint", move)
 
