@@ -6,6 +6,10 @@ import pytest
 from waldo_commander.components import control
 
 
+def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
+    assert control.ControlPanel.INCREMENTAL_MOVE_TIMEOUT_S == 30.0
+
+
 def test_zdt_speed_is_clamped_to_encodable_floor() -> None:
     assert control._normalized_speed(1, "parol6_zdt_backend") == 0.6
 

@@ -603,6 +603,8 @@ def _norm_accel() -> float:
 class ControlPanel:
     """Bottom-left control panel for jog settings and robot control."""
 
+    INCREMENTAL_MOVE_TIMEOUT_S = 30.0
+
     def __init__(self, client: RobotClient) -> None:
         """Initialize control panel with jog state and required robot client."""
         self.client = client
@@ -1421,7 +1423,12 @@ class ControlPanel:
                         target_angles[j] = min(hi, target_angles[j] + step)
                     else:
                         target_angles[j] = max(lo, target_angles[j] - step)
-                    await self.client.move_j(target_angles, speed=speed, accel=accel)
+                    await self.client.move_j(
+                        target_angles,
+                        speed=speed,
+                        accel=accel,
+                        timeout=self.INCREMENTAL_MOVE_TIMEOUT_S,
+                    )
 
             await self._run_incremental_move("joint", move)
 
