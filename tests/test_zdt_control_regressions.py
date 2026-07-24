@@ -18,7 +18,7 @@ def test_zdt_speed_is_clamped_to_encodable_floor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_incremental_moves_queue_overlapping_clicks() -> None:
+async def test_incremental_moves_reject_overlapping_clicks() -> None:
     panel = object.__new__(control.ControlPanel)
     panel._incremental_move_lock = asyncio.Lock()
     started = asyncio.Event()
@@ -38,10 +38,12 @@ async def test_incremental_moves_queue_overlapping_clicks() -> None:
 
     assert calls == 1
 
-    release.set()
-    await asyncio.gather(first, second)
+    await second
+    assert calls == 1
 
-    assert calls == 2
+    release.set()
+    await first
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -94,11 +96,8 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
     release.set()
     await asyncio.gather(first, second)
 
-    assert targets == [
-        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    ]
-    assert refreshes == 2
+    assert targets == [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+    assert refreshes == 1
 
 
 def test_playback_cleanup_cancels_page_timer() -> None:

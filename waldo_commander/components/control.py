@@ -733,17 +733,18 @@ class ControlPanel:
         label: str,
         operation: Callable[[], Any],
     ) -> None:
-        """Serialize rapid clicks so none are silently discarded."""
+        """Run one bounded hardware step and reject overlapping UI clicks."""
         if self._incremental_move_lock.locked():
-            logger.info("Queueing overlapping incremental %s move", label)
+            logger.info("Ignoring overlapping incremental %s move", label)
             ui_client = getattr(self, "_ui_client", None)
             if ui_client is not None:
                 with ui_client:
                     ui.notify(
-                        "上一动作正在完成，当前操作已排队",
+                        "上一动作正在完成，请等待按钮恢复后再操作",
                         color="info",
                         timeout=1200,
                     )
+            return
         async with self._incremental_move_lock:
             try:
                 await operation()
