@@ -186,7 +186,11 @@ class _EStopManager:
                                 self._dialog.close()
                                 self._dialog = None
                         except Exception as e:
-                            logger.error("Reset after digital E-STOP failed: %s", e)
+                            message = f"Reset failed: {e}"
+                            ui.notify(message, color="negative")
+                            logger.warning(
+                                "Reset after digital E-STOP failed: %s", e
+                            )
 
                     with ui.row().classes("gap-2 justify-center w-full mt-4"):
                         ui.button("Reset", on_click=reset).props(

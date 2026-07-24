@@ -82,6 +82,28 @@ async def test_digital_estop_dialog_behavior(user: User) -> None:
     await asyncio.sleep(0.1)
 
 
+@pytest.mark.integration
+async def test_digital_estop_reset_failure_is_visible(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    from waldo_commander.state import ui_state
+
+    async def fail_reset() -> int:
+        raise RuntimeError("fault reset unavailable")
+
+    monkeypatch.setattr(ui_state.control_panel.client, "reset", fail_reset)
+    user.find(marker="btn-estop").click()
+    await user.should_see("Digital E-STOP Active")
+
+    user.find(marker="btn-estop-resume").click()
+
+    await user.should_see("Reset failed: fault reset unavailable")
+    await user.should_see("Digital E-STOP Active")
+
+
 @pytest.mark.unit
 async def test_mode_switch_stops_running_script(tmp_path) -> None:
     """Switching between simulator and robot modes should stop any running user script.
