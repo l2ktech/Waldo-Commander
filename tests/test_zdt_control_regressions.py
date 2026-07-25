@@ -368,6 +368,21 @@ def test_non_loopback_primary_browser_is_distinct_from_local_automation() -> Non
     assert commander_main._client_is_loopback(page("192.168.1.5")) is False
 
 
+def test_browser_holder_description_includes_device_browser_and_tab() -> None:
+    page = SimpleNamespace(
+        id="client-id",
+        tab_id="tab-123456789",
+        request=SimpleNamespace(
+            client=SimpleNamespace(host="192.168.1.88"),
+            headers={"user-agent": "Mozilla/5.0 Chrome/140.0"},
+        ),
+    )
+
+    assert commander_main._browser_client_description(page) == (
+        "192.168.1.88 · Chrome · 标签页 tab-1234"
+    )
+
+
 def test_only_real_browser_navigation_can_reserve_primary_slot(monkeypatch) -> None:
     monkeypatch.delitem(commander_main.sys.modules, "pytest", raising=False)
 

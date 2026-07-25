@@ -1506,8 +1506,13 @@ def _build_takeover_overlay(message: str) -> None:
         with ui.column().classes("overlay-card items-center max-w-sm p-8"):
             ui.label("Waldo Commander").classes("text-xl font-semibold")
             ui.label(message).classes("text-sm text-center opacity-90")
+            held_id = ui_state.active_client_id
+            held_client = Client.instances.get(held_id) if held_id is not None else None
             ui.label(
-                "Only the primary Chrome window on this 5800X can control the robot."
+                f"当前控制页面：{_browser_client_description(held_client)}"
+            ).classes("text-xs text-center opacity-80")
+            ui.label(
+                "任何获准访问此页面的设备都可以取得控制；运动命令仍由后端串行执行。"
             ).classes("text-xs text-center opacity-70")
             ui.button("接管控制", on_click=take_control).props(
                 "color=primary unelevated"
@@ -1546,6 +1551,26 @@ def _client_is_loopback(page_client: Client | None) -> bool:
         return host == "localhost"
 
 
+def _browser_client_description(page_client: Client | None) -> str:
+    if page_client is None:
+        return "无活动浏览器"
+    request_client = getattr(page_client.request, "client", None)
+    host = getattr(request_client, "host", "未知地址")
+    user_agent = page_client.request.headers.get("user-agent", "")
+    if "Edg/" in user_agent:
+        browser = "Edge"
+    elif "Chrome/" in user_agent:
+        browser = "Chrome"
+    elif "Firefox/" in user_agent:
+        browser = "Firefox"
+    elif "Safari/" in user_agent:
+        browser = "Safari"
+    else:
+        browser = "浏览器"
+    tab_id = page_client.tab_id or page_client.id
+    return f"{host} · {browser} · 标签页 {str(tab_id)[:8]}"
+
+
 def _client_is_browser_navigation(page_client: Client | None) -> bool:
     """Return whether the request is a real browser document navigation.
 
@@ -1576,22 +1601,12 @@ async def index_page():
     # status consumer never touches stale panel references from a
     # previous (deleted) client.
 
-    # The first live page owns the fixed primary slot. Other tabs cannot
-    # replace it; they remain locked until the primary Chrome page reconnects.
-    # Also reclaim if the held id is stale (tab disconnected without firing
-    # _on_disconnect, or test fixtures churning clients rapidly).
+    # Any real browser navigation may become the controller. The newest page
+    # replaces the prior browser page, while non-browser probes never reserve
+    # the slot. Worker-side command ownership still prevents overlapping moves.
     held_id = ui_state.active_client_id
     held_client = Client.instances.get(held_id) if held_id is not None else None
     is_browser_navigation = _client_is_browser_navigation(this_client)
-    presented_token = this_client.request.query_params.get("waldo_tab")
-    token_refresh = (
-        is_browser_navigation
-        and
-        held_client is not None
-        and ui_state.active_page_token is not None
-        and presented_token is not None
-        and secrets.compare_digest(presented_token, ui_state.active_page_token)
-    )
     logger.debug(
         "Page ownership: client=%s tab=%s held=%s held_tab=%s referer=%s cache=%s",
         this_client.id,
@@ -1601,28 +1616,10 @@ async def index_page():
         this_client.request.headers.get("referer"),
         this_client.request.headers.get("cache-control"),
     )
-    same_tab_refresh = (
-        held_client is not None
-        and held_client.tab_id is not None
-        and held_client.tab_id == this_client.tab_id
-    )
-    primary_replaces_local_automation = (
-        is_browser_navigation
-        and
-        held_client is not None
-        and _client_is_loopback(held_client)
-        and not _client_is_loopback(this_client)
-    )
-    if token_refresh or same_tab_refresh or primary_replaces_local_automation:
-        # Chrome establishes the replacement page before the old websocket
-        # necessarily emits disconnect. The server-issued page token (or a
-        # stable NiceGUI tab_id once available) identifies a primary refresh.
-        _cleanup_page_resources(held_client)
-        control_lease.release(BROWSER, held_client.id)
-        ui_state.active_client_id = this_client.id
-        if primary_replaces_local_automation:
-            ui_state.active_page_token = secrets.token_urlsafe(18)
-    elif is_browser_navigation and (held_id is None or held_client is None):
+    if is_browser_navigation:
+        if held_client is not None and held_client is not this_client:
+            _cleanup_page_resources(held_client)
+            control_lease.release(BROWSER, held_client.id)
         ui_state.active_client_id = this_client.id
         ui_state.active_page_token = secrets.token_urlsafe(18)
     is_active = (
@@ -1662,7 +1659,7 @@ async def index_page():
         # classes (defined in theme.py) actually exist on shadow pages.
         apply_theme("dark")
         inject_layout_css()
-        _build_takeover_overlay("Locked to the primary 5800X Chrome window")
+        _build_takeover_overlay("控制权已转移到其他浏览器，刷新本页即可重新取得控制")
         this_client._waldo_shadow_ping_timer = ui.timer(  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
             interval=1.0,
             callback=check_ping,
