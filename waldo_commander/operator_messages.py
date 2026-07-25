@@ -10,9 +10,18 @@ def operator_error(action: str, error: BaseException | str) -> str:
     if "capability_not_authorized" in normalized:
         reason = "目标超出本次授权的运动范围"
         solution = "请减小步长或使用分段移动；若按钮仍可点击，请刷新页面后重试"
+    elif "overlapping official motion" in normalized:
+        reason = "上一动作尚未完成"
+        solution = "请等待按钮恢复后再操作，不要连续重复点击"
+    elif "fakecan-only" in normalized:
+        reason = "当前 SocketCAN 真机后端不支持页面仿真模式"
+        solution = "请保持真机模式；如需仿真，请启动独立的 FakeCAN 仿真实例"
     elif "terminal target error" in normalized:
-        reason = "机械臂已停止，但终点误差超过验收范围"
-        solution = "请降低速度或加速度后重试；若持续出现，请停止操作并检查机械负载"
+        reason = "机械臂已安全停止，但自动终点纠偏后仍未达到目标"
+        solution = "请降低页面速度或加速度后重试；若持续出现，请停止操作并检查机械负载"
+    elif "selected-axes speed must be at least" in normalized:
+        reason = "当前速度低于驱动器可执行的最小速度"
+        solution = "请将页面速度提高一档后重试"
     elif "current grant and lease" in normalized or "lease" in normalized:
         reason = "页面控制授权已失效"
         solution = "请等待上一动作结束；仍未恢复时刷新页面并重新接管"

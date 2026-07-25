@@ -106,8 +106,18 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
         ),
         (
             "terminal target error 0.44 deg exceeds 0.25 deg",
-            "机械臂已停止，但终点误差超过验收范围",
-            "请降低速度或加速度后重试",
+            "机械臂已安全停止，但自动终点纠偏后仍未达到目标",
+            "请降低页面速度或加速度后重试",
+        ),
+        (
+            "overlapping official motion is not allowed",
+            "上一动作尚未完成",
+            "请等待按钮恢复后再操作",
+        ),
+        (
+            "simulator methods are FakeCAN-only",
+            "当前 SocketCAN 真机后端不支持页面仿真模式",
+            "请保持真机模式",
         ),
         (
             "Robot mode requires a hardware connection",
@@ -131,6 +141,115 @@ def test_operator_errors_are_chinese_and_actionable(
     assert expected_solution in message
     assert raw_error not in message
     assert "处理方法：" in message
+
+
+@pytest.mark.asyncio
+async def test_small_safe_terminal_miss_retries_same_absolute_target(
+    monkeypatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+    calls: list[tuple[list[float], float, float]] = []
+    encoder_refreshes = 0
+
+    async def move_j(target, *, speed, accel, wait, timeout):
+        calls.append((target, speed, accel))
+        assert wait is True
+        assert timeout == 120.0
+        if len(calls) == 1:
+            raise RuntimeError(
+                "outcome=RESULT_UNKNOWN detail_code=OFFICIAL_MOTION_RUNTIME_REJECTED "
+                "stop_outcome=CONFIRMED_STOPPED detail=SAFE_TERMINAL "
+                "J1 terminal target error 0.550397 deg exceeds 0.500000 deg"
+            )
+
+    async def angles():
+        nonlocal encoder_refreshes
+        encoder_refreshes += 1
+        return [9.449603, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    panel.client = SimpleNamespace(move_j=move_j, angles=angles)
+    target = [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    await panel._move_j_with_terminal_correction(
+        target,
+        speed=1.0,
+        accel=1.0,
+        timeout=120.0,
+    )
+
+    assert encoder_refreshes == 1
+    assert calls == [(target, 1.0, 1.0), (target, 0.2, 0.2)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        "overlapping official motion is not allowed",
+        (
+            "stop_outcome=SENT_UNCONFIRMED detail=SAFE_TERMINAL "
+            "J1 terminal target error 0.55 deg exceeds 0.50 deg"
+        ),
+        (
+            "stop_outcome=CONFIRMED_STOPPED detail=SAFE_TERMINAL "
+            "J1 terminal target error 1.10 deg exceeds 0.50 deg"
+        ),
+    ],
+)
+async def test_terminal_correction_rejects_unsafe_or_unrelated_failures(error) -> None:
+    panel = object.__new__(control.ControlPanel)
+    calls = 0
+
+    async def move_j(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError(error)
+
+    async def angles():
+        raise AssertionError("unsafe failures must not read for a retry")
+
+    panel.client = SimpleNamespace(move_j=move_j, angles=angles)
+    with pytest.raises(RuntimeError, match=error):
+        await panel._move_j_with_terminal_correction(
+            [0.0] * 6,
+            speed=1.0,
+            accel=1.0,
+            timeout=120.0,
+        )
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_zdt_backend_rejects_simulator_toggle_before_client_call(
+    monkeypatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+
+    async def simulator(_enabled):
+        raise AssertionError("ZDT must not call the FakeCAN-only method")
+
+    panel.client = SimpleNamespace(simulator=simulator)
+    monkeypatch.setattr(
+        control.ui_state,
+        "robot",
+        SimpleNamespace(backend_package="parol6_zdt_backend"),
+    )
+    notifications: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+    )
+
+    await panel.on_toggle_sim()
+
+    assert notifications == [
+        (
+            "当前为 SocketCAN 真机后端，不能切换到页面仿真模式。"
+            "如需仿真，请启动独立的 FakeCAN 仿真实例。",
+            "info",
+        )
+    ]
 
 
 def test_joint_limit_waypoints_never_exceed_receipt_delta() -> None:

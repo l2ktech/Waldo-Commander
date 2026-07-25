@@ -87,6 +87,11 @@ _RE_VIEWBOX = re.compile(r'viewBox="\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*"')
 _RE_SVG_INNER = re.compile(r"<svg[^>]*>([\s\S]*?)</svg>")
 _RE_TEXT_LABEL = re.compile(r"(<text\b[^>]*>)(.*?)(</text>)", re.DOTALL)
 _RE_WHITESPACE = re.compile(r"\s+")
+_RE_TERMINAL_TARGET_ERROR = re.compile(
+    r"terminal target error\s+([0-9]+(?:\.[0-9]+)?)\s*deg"
+    r"\s+exceeds\s+([0-9]+(?:\.[0-9]+)?)\s*deg",
+    re.IGNORECASE,
+)
 
 
 def _joint_limit_waypoints(
@@ -639,11 +644,29 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
     )
 
 
+def _safe_terminal_error_deg(error: BaseException | str) -> float | None:
+    """Return a bounded correction error only after a confirmed safe stop."""
+    message = str(error)
+    normalized = message.lower().replace(" ", "_").replace("-", "_")
+    if "confirmed_stopped" not in normalized or "safe_terminal" not in normalized:
+        return None
+    match = _RE_TERMINAL_TARGET_ERROR.search(message)
+    if match is None:
+        return None
+    error_deg, tolerance_deg = (float(value) for value in match.groups())
+    if error_deg <= tolerance_deg or error_deg > 1.0:
+        return None
+    return error_deg
+
+
 class ControlPanel:
     """Bottom-left control panel for jog settings and robot control."""
 
     INCREMENTAL_MOVE_TIMEOUT_S = 120.0
     EXACT_MOVE_TIMEOUT_S = 120.0
+    TERMINAL_CORRECTION_ATTEMPTS = 2
+    TERMINAL_CORRECTION_SPEED = 0.2
+    TERMINAL_CORRECTION_ACCEL = 0.2
 
     def __init__(self, client: RobotClient) -> None:
         """Initialize control panel with jog state and required robot client."""
@@ -798,6 +821,62 @@ class ControlPanel:
                             color="negative",
                             timeout=6000,
                         )
+
+    async def _move_j_with_terminal_correction(
+        self,
+        target: list[float],
+        *,
+        speed: float,
+        accel: float,
+        timeout: float,
+    ) -> None:
+        """Reissue an absolute target after a small, confirmed-safe miss."""
+        correction_count = 0
+        previous_error = math.inf
+        while True:
+            try:
+                await self.client.move_j(
+                    target,
+                    speed=speed,
+                    accel=accel,
+                    wait=True,
+                    timeout=timeout,
+                )
+                return
+            except Exception as error:
+                error_deg = _safe_terminal_error_deg(error)
+                if (
+                    error_deg is None
+                    or correction_count >= self.TERMINAL_CORRECTION_ATTEMPTS
+                    or error_deg >= previous_error
+                ):
+                    raise
+
+                # Refresh the real encoders before reissuing the same absolute
+                # target. This closes the residual error without accumulating
+                # a blind relative offset or overlapping the previous grant.
+                actual = await self.client.angles()
+                if (
+                    actual is None
+                    or len(actual) < len(target)
+                    or not all(math.isfinite(float(value)) for value in actual)
+                ):
+                    raise
+
+                correction_count += 1
+                previous_error = error_deg
+                speed = min(max(float(speed), 0.1), self.TERMINAL_CORRECTION_SPEED)
+                accel = min(
+                    max(float(accel), 0.1),
+                    self.TERMINAL_CORRECTION_ACCEL,
+                )
+                logger.info(
+                    "Retrying absolute joint target after confirmed safe "
+                    "terminal miss %.6f deg (correction %d/%d)",
+                    error_deg,
+                    correction_count,
+                    self.TERMINAL_CORRECTION_ATTEMPTS,
+                )
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
         """Build cartesian axis lookup from the active robot's frame names.
@@ -1852,11 +1931,10 @@ class ControlPanel:
             pose = angles[: self._n_joints]
             pose[joint_index] = tgt
             spd = _norm_speed()
-            await self.client.move_j(
+            await self._move_j_with_terminal_correction(
                 pose,
                 speed=spd,
                 accel=_norm_accel(),
-                wait=True,
                 timeout=self.EXACT_MOVE_TIMEOUT_S,
             )
             await self.client.angles()
@@ -1882,11 +1960,10 @@ class ControlPanel:
             ):
                 target = angles[: self._n_joints]
                 target[joint_index] = current
-                await self.client.move_j(
+                await self._move_j_with_terminal_correction(
                     target,
                     speed=spd,
                     accel=_norm_accel(),
-                    wait=True,
                     timeout=self.EXACT_MOVE_TIMEOUT_S,
                 )
                 angles[joint_index] = current
@@ -1981,6 +2058,8 @@ class ControlPanel:
         """Update Robot/Simulator toggle button appearance."""
         if self._robot_btn is None:
             return
+        if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+            self._robot_btn.props("disable")
         if waldoctl.commander.status.simulator_active:
             self._robot_btn.props("color=amber-8")
             self._robot_btn.classes(add="glass-btn glass-amber")
@@ -2005,6 +2084,14 @@ class ControlPanel:
 
     async def on_toggle_sim(self) -> None:
         """Toggle between robot and simulator modes and update URDF appearance."""
+        if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+            ui.notify(
+                "当前为 SocketCAN 真机后端，不能切换到页面仿真模式。"
+                "如需仿真，请启动独立的 FakeCAN 仿真实例。",
+                color="info",
+                timeout=5000,
+            )
+            return
         try:
             # Stop any running user script before mode switch (safety)
             if is_any_program_running():
@@ -2624,9 +2711,15 @@ class ControlPanel:
                     on_click=self.on_toggle_sim,
                 )
                 .props("round unelevated dense")
-                .tooltip("Robot/Simulator")
             )
             robot_btn.mark("btn-robot-toggle")
+            if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+                robot_btn.props("disable")
+                robot_btn.tooltip(
+                    "SocketCAN 真机后端固定为 Robot；仿真需使用独立 FakeCAN 实例"
+                )
+            else:
+                robot_btn.tooltip("Robot/Simulator")
             self._robot_btn = robot_btn
 
             selected = {"value": "Move"}
