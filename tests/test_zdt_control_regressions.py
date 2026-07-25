@@ -194,6 +194,46 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
     ]
 
 
+@pytest.mark.asyncio
+async def test_incremental_move_auto_recovers_incomplete_authority(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = asyncio.Lock()
+    panel._ui_client = None
+    calls: list[str] = []
+    notifications: list[tuple[str, str]] = []
+
+    async def stop() -> int:
+        calls.append("stop")
+        return 1
+
+    async def reset() -> int:
+        calls.append("reset")
+        return 1
+
+    attempts = 0
+
+    async def operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        calls.append(f"move-{attempts}")
+        if attempts == 1:
+            raise RuntimeError("current grant and lease are required")
+
+    panel.client = SimpleNamespace(stop=stop, reset=reset)
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+    )
+
+    await panel._run_incremental_move("joint", operation)
+
+    assert calls == ["move-1", "stop", "reset", "move-2"]
+    assert notifications == [
+        ("控制授权已自动恢复，本次动作已重新执行。", "positive")
+    ]
+
+
 @pytest.mark.parametrize(
     ("raw_error", "expected_reason", "expected_solution"),
     [
@@ -204,8 +244,8 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
         ),
         (
             "terminal target error 0.44 deg exceeds 0.25 deg",
-            "机械臂已安全停止，但自动终点纠偏后仍未达到目标",
-            "请降低页面速度或加速度后重试",
+            "机械臂已安全停止，但实际位置与目标存在偏差",
+            "系统不会自动纠偏或锁定控制",
         ),
         (
             "overlapping official motion is not allowed",
@@ -232,6 +272,16 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
             "终点编码器稳定采样未在规定时间内完成",
             "请点击页面上的“恢复控制”",
         ),
+        (
+            "current grant and lease are required",
+            "内部控制授权未完整建立",
+            "自动停止、回收旧授权并重新开放操作",
+        ),
+        (
+            "STOP_ALREADY_PENDING",
+            "上一条停止命令仍在收尾",
+            "等待停止完成并自动复位",
+        ),
     ],
 )
 def test_operator_errors_are_chinese_and_actionable(
@@ -247,13 +297,17 @@ def test_operator_errors_are_chinese_and_actionable(
 
 
 @pytest.mark.asyncio
-async def test_small_safe_terminal_miss_adds_measured_residual(
+async def test_small_safe_terminal_miss_is_displayed_without_retry(
     monkeypatch,
 ) -> None:
     panel = object.__new__(control.ControlPanel)
     calls: list[tuple[list[float], float, float]] = []
-    encoder_refreshes = 0
-    panel._get_joint_limits = lambda _joint: (-180.0, 180.0)
+    notifications: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, *, color=None, **_kwargs: notifications.append((message, color)),
+    )
 
     async def move_j(target, *, speed, accel, wait, timeout):
         calls.append((list(target), speed, accel))
@@ -266,11 +320,7 @@ async def test_small_safe_terminal_miss_adds_measured_residual(
         )
 
     async def angles():
-        nonlocal encoder_refreshes
-        encoder_refreshes += 1
-        if encoder_refreshes == 1:
-            return [9.449603, 0.0, 0.0, 0.0, 0.0, 0.0]
-        return [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return [9.449603, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     panel.client = SimpleNamespace(move_j=move_j, angles=angles)
     target = [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -283,10 +333,9 @@ async def test_small_safe_terminal_miss_adds_measured_residual(
         timeout=120.0,
     )
 
-    assert encoder_refreshes == 2
-    assert calls == [
-        (target, 1.0, 1.0),
-        ([10.550397, 0.0, 0.0, 0.0, 0.0, 0.0], 0.2, 0.2),
+    assert calls == [(target, 1.0, 1.0)]
+    assert notifications == [
+        ("J1 已安全停止，目标偏差 +0.550°；未自动纠偏，可继续操作或手动再次移动。", "warning")
     ]
 
 
@@ -673,8 +722,8 @@ async def test_cartesian_jog_failure_releases_button_and_notifies(monkeypatch) -
     assert timer.active is False
     assert notifications == [
         (
-            "笛卡尔点动失败：页面控制授权已失效。"
-            "处理方法：请等待上一动作结束；仍未恢复时刷新页面并重新接管。",
+            "笛卡尔点动失败：内部控制授权未完整建立。"
+            "处理方法：请点击“恢复控制”，页面会自动停止、回收旧授权并重新开放操作。",
             "negative",
         )
     ]

@@ -17,17 +17,23 @@ def operator_error(action: str, error: BaseException | str) -> str:
         reason = "当前 SocketCAN 真机后端不支持页面仿真模式"
         solution = "请保持真机模式；如需仿真，请启动独立的 FakeCAN 仿真实例"
     elif "terminal target error" in normalized:
-        reason = "机械臂已安全停止，但自动终点纠偏后仍未达到目标"
-        solution = "请降低页面速度或加速度后重试；若持续出现，请停止操作并检查机械负载"
+        reason = "机械臂已安全停止，但实际位置与目标存在偏差"
+        solution = "系统不会自动纠偏或锁定控制；可继续操作，或手动再次移动到目标"
     elif "stable terminal encoder sampling deadline expired" in normalized:
         reason = "机械臂已停止，但终点编码器稳定采样未在规定时间内完成"
         solution = "请点击页面上的“恢复控制”，再降低速度或步长后重试"
     elif "selected-axes speed must be at least" in normalized:
         reason = "当前速度低于驱动器可执行的最小速度"
         solution = "请将页面速度提高一档后重试"
-    elif "current grant and lease" in normalized or "lease" in normalized:
+    elif "stop_already_pending" in normalized or "stop is already pending" in normalized:
+        reason = "上一条停止命令仍在收尾"
+        solution = "请点击“恢复控制”，页面会等待停止完成并自动复位"
+    elif "current grant and lease" in normalized:
+        reason = "内部控制授权未完整建立"
+        solution = "请点击“恢复控制”，页面会自动停止、回收旧授权并重新开放操作"
+    elif "lease" in normalized:
         reason = "页面控制授权已失效"
-        solution = "请等待上一动作结束；仍未恢复时刷新页面并重新接管"
+        solution = "请点击“恢复控制”自动回收旧授权；无需重启或修改代码"
     elif "soft limit" in normalized or "signed maximum delta" in normalized:
         reason = "目标接近软限位或单次位移过大"
         solution = "请反向移动、减小步长或使用分段移动"
@@ -42,7 +48,7 @@ def operator_error(action: str, error: BaseException | str) -> str:
         solution = "请确认 worker、can0 和适配器在线，或切换到仿真模式"
     elif "fault reset" in normalized or "operator stop is not confirmed" in normalized:
         reason = "停止状态尚未满足复位条件"
-        solution = "请先确认机械臂已停止、六轴零速且没有活动任务，然后再次复位"
+        solution = "请再次点击“恢复控制”；页面会先执行停止确认，再自动复位"
     elif "home assistant software estop" in normalized:
         reason = "Home Assistant 软件停止仍处于开启状态"
         solution = "请先在 Home Assistant 关闭软件停止，再执行复位"

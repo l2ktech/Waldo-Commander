@@ -57,6 +57,18 @@ def _read_only_mode() -> bool:
         "on",
     }
 
+
+def _is_recoverable_authority_error(error: BaseException) -> bool:
+    normalized = str(error).lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "current grant and lease",
+            "stop_already_pending",
+            "stop is already pending",
+        )
+    )
+
 # Module-level constants and precompiled regexes: avoid recreating them every frame.
 _AXIS_ORDER = (
     "X+",
@@ -184,6 +196,9 @@ class _EStopManager:
         if self._reset_btn is not None:
             self._reset_btn.disable()
         try:
+            stopped = await self._client.stop()
+            if stopped != 1:
+                raise RuntimeError("operator stop returned no acknowledgement")
             result = await self._client.reset()
             if result != 1:
                 raise RuntimeError("fault reset returned no acknowledgement")
@@ -846,6 +861,27 @@ class ControlPanel:
             try:
                 await operation()
             except Exception as error:
+                if _is_recoverable_authority_error(error):
+                    try:
+                        stopped = await self.client.stop()
+                        if stopped != 1:
+                            raise RuntimeError(
+                                "operator stop returned no acknowledgement"
+                            )
+                        reset = await self.client.reset()
+                        if reset != 1:
+                            raise RuntimeError(
+                                "fault reset returned no acknowledgement"
+                            )
+                        await operation()
+                        ui.notify(
+                            "控制授权已自动恢复，本次动作已重新执行。",
+                            color="positive",
+                            timeout=2500,
+                        )
+                        return
+                    except Exception as retry_error:
+                        error = retry_error
                 if _is_operator_stop_terminal(error):
                     logger.info("Incremental %s move stopped by operator", label)
                     return
@@ -869,88 +905,44 @@ class ControlPanel:
         accel: float,
         timeout: float,
     ) -> None:
-        """Compensate a small external position miss after a confirmed stop."""
-        correction_count = 0
-        previous_user_error = math.inf
-        command_target = list(target)
-        while True:
-            try:
-                await self.client.move_j(
-                    command_target,
-                    speed=speed,
-                    accel=accel,
-                    wait=True,
-                    timeout=timeout,
-                )
-                terminal_error: Exception | None = None
-            except Exception as error:
-                miss = _safe_terminal_miss(error)
-                if miss is None or miss[0] != joint_index:
-                    raise
-                terminal_error = error
-
-            # A successful move and an eligible correction failure are both
-            # stopped terminals. Judge the original operator target using a
-            # fresh external joint position.
-            actual = await self.client.angles()
-            if (
-                actual is None
-                or len(actual) < len(target)
-                or not all(math.isfinite(float(value)) for value in actual)
-            ):
-                if terminal_error is not None:
-                    raise terminal_error
-                raise RuntimeError("terminal correction requires fresh joint angles")
-
-            user_error = float(target[joint_index]) - float(actual[joint_index])
-            if abs(user_error) <= 0.5:
-                return
-            if (
-                correction_count >= self.TERMINAL_CORRECTION_ATTEMPTS
-                or abs(user_error) >= previous_user_error
-                or abs(user_error) > 1.0
-            ):
-                if terminal_error is not None:
-                    raise terminal_error
-                raise RuntimeError(
-                    f"J{joint_index + 1} terminal target error "
-                    f"{abs(user_error):.6f} deg exceeds 0.500000 deg"
-                )
-
-            # X42S defaults to a 0.8° arrival window. Reissuing the same target
-            # can finish without moving, so add the measured residual to the
-            # previous command target. This is bounded external-loop
-            # compensation, not an unbounded relative jog.
-            lo, hi = self._get_joint_limits(joint_index)
-            compensated = max(
-                lo,
-                min(
-                    hi,
-                    float(command_target[joint_index]) + user_error,
-                ),
+        """Run once, then display the stopped terminal error without retrying."""
+        try:
+            await self.client.move_j(
+                target,
+                speed=speed,
+                accel=accel,
+                wait=True,
+                timeout=timeout,
             )
-            if math.isclose(compensated, command_target[joint_index], abs_tol=1e-9):
-                if terminal_error is not None:
-                    raise terminal_error
-                raise RuntimeError("terminal correction is blocked by the soft limit")
+            terminal_error: Exception | None = None
+        except Exception as error:
+            miss = _safe_terminal_miss(error)
+            if miss is None or miss[0] != joint_index:
+                raise
+            terminal_error = error
 
-            command_target = list(actual[: len(target)])
-            command_target[joint_index] = compensated
-            correction_count += 1
-            previous_user_error = abs(user_error)
-            speed = min(max(float(speed), 0.1), self.TERMINAL_CORRECTION_SPEED)
-            accel = min(
-                max(float(accel), 0.1),
-                self.TERMINAL_CORRECTION_ACCEL,
+        actual = await self.client.angles()
+        if (
+            actual is None
+            or len(actual) < len(target)
+            or not all(math.isfinite(float(value)) for value in actual)
+        ):
+            if terminal_error is not None:
+                raise terminal_error
+            raise RuntimeError("terminal position display requires fresh joint angles")
+
+        user_error = float(target[joint_index]) - float(actual[joint_index])
+        if abs(user_error) > 0.25:
+            ui.notify(
+                f"J{joint_index + 1} 已安全停止，目标偏差 {user_error:+.3f}°；"
+                "未自动纠偏，可继续操作或手动再次移动。",
+                color="warning",
+                timeout=6000,
             )
-            logger.info(
-                "Compensating J%d terminal miss %.6f deg with command %.6f deg "
-                "(correction %d/%d)",
+            logger.warning(
+                "J%d stopped with terminal target error %+.6f deg",
                 joint_index + 1,
                 user_error,
-                compensated,
-                correction_count,
-                self.TERMINAL_CORRECTION_ATTEMPTS,
             )
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
@@ -2246,6 +2238,9 @@ class ControlPanel:
             if self._fault_reset_btn is not None:
                 self._fault_reset_btn.disable()
             try:
+                stopped = await self.client.stop()
+                if stopped != 1:
+                    raise RuntimeError("operator stop returned no acknowledgement")
                 result = await self.client.reset()
                 if result != 1:
                     raise RuntimeError("fault reset returned no acknowledgement")

@@ -91,18 +91,22 @@ async def test_operator_fault_reset_button_recovers_control(
 
     from waldo_commander.state import ui_state
 
-    calls = 0
+    calls: list[str] = []
 
-    async def reset() -> int:
-        nonlocal calls
-        calls += 1
+    async def stop() -> int:
+        calls.append("stop")
         return 1
 
+    async def reset() -> int:
+        calls.append("reset")
+        return 1
+
+    monkeypatch.setattr(ui_state.control_panel.client, "stop", stop)
     monkeypatch.setattr(ui_state.control_panel.client, "reset", reset)
     user.find(marker="btn-fault-reset").click()
 
     await user.should_see("控制故障已复位，运动按钮已恢复")
-    assert calls == 1
+    assert calls == ["stop", "reset"]
 
 
 @pytest.mark.integration
@@ -117,6 +121,10 @@ async def test_digital_estop_reset_failure_is_visible(
     async def fail_reset() -> int:
         raise RuntimeError("fault reset unavailable")
 
+    async def stop() -> int:
+        return 1
+
+    monkeypatch.setattr(ui_state.control_panel.client, "stop", stop)
     monkeypatch.setattr(ui_state.control_panel.client, "reset", fail_reset)
     user.find(marker="btn-estop").click()
     await user.should_see("软件停止已触发")
@@ -183,8 +191,12 @@ async def test_digital_estop_reset_requires_acknowledgement(
     async def unacknowledged_reset() -> int:
         return 0
 
+    async def stop() -> int:
+        return 1
+
     user.find(marker="btn-estop").click()
     await user.should_see("软件停止已触发")
+    monkeypatch.setattr(ui_state.control_panel.client, "stop", stop)
     monkeypatch.setattr(ui_state.control_panel.client, "reset", unacknowledged_reset)
     user.find(marker="btn-estop-resume").click()
 
