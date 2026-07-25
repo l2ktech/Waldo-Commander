@@ -48,6 +48,15 @@ def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
         1,
     ]
     assert commander_main._urdf_angle_signs("parol6") == [1] * 6
+    assert commander_main._urdf_angle_offsets("parol6_zdt_backend") == [
+        -9.0,
+        0.0,
+        -10.0,
+        30.0,
+        45.0,
+        15.0,
+    ]
+    assert commander_main._urdf_angle_offsets("parol6") == [0.0] * 6
 
 
 def test_jog_enablement_uses_independent_safety_state_caches(monkeypatch) -> None:

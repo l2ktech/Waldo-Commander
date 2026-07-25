@@ -99,6 +99,13 @@ def _urdf_angle_signs(backend_package: str) -> list[int]:
         return [-1, 1, 1, 1, 1, 1]
     return [1, 1, 1, 1, 1, 1]
 
+
+def _urdf_angle_offsets(backend_package: str) -> list[float]:
+    """Visual-only assembly zero offsets; hardware coordinates stay untouched."""
+    if backend_package == "parol6_zdt_backend":
+        return [-9.0, 0.0, -10.0, 30.0, 45.0, 15.0]
+    return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
 STATIC_DIR = pkg_files("waldo_commander").joinpath("static")
 ng_app.add_static_files("/static", str(STATIC_DIR))
 
@@ -244,6 +251,7 @@ async def initialize_urdf_scene(page_state: _PageState) -> bool:
         sim_color=SceneColors.SIM_AMBER_HEX,
         sim_opacity=0.9,
         angle_signs=_urdf_angle_signs(robot.backend_package),
+        angle_offsets=_urdf_angle_offsets(robot.backend_package),
     )
 
     scene = UrdfScene(urdf_path, config=scene_config)
