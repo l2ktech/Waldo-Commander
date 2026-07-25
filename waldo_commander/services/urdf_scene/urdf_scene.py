@@ -62,6 +62,21 @@ SHAPE_OPACITY = 0.35
 _Y_TO_Z_UP = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
 
 
+def _visual_mesh_scale(visual: Any, global_scale: float) -> tuple[float, float, float]:
+    """Combine the scene-wide STL scale with a URDF mesh's own XYZ scale."""
+    mesh = getattr(getattr(visual, "geometry", None), "geometry", None)
+    raw = getattr(mesh, "scale", None)
+    if raw is None:
+        return (global_scale, global_scale, global_scale)
+    try:
+        values = np.asarray(raw, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return (global_scale, global_scale, global_scale)
+    if values.size != 3 or not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+        return (global_scale, global_scale, global_scale)
+    return tuple(float(global_scale * value) for value in values)
+
+
 def _z_align_rotation(n: np.ndarray) -> np.ndarray:
     """Rotation taking +Z to the unit vector ``n`` (Rodrigues; 180° safe)."""
     z = np.array([0.0, 0.0, 1.0])
@@ -2091,9 +2106,10 @@ class UrdfScene(
     def _plot_stls(self, link, scale: float = 1, material=None):
         """Add all visual STLs from a link to the scene."""
         for visual in link.visuals:
+            mesh_scale = _visual_mesh_scale(visual, scale)
             obj = ui.scene.stl(
                 self._stl_to_url(visual.geometry.geometry.filename)
-            ).scale(scale)
+            ).scale(*mesh_scale)
             if visual.origin is not None:
                 t, r = get_transl_and_rpy(visual.origin)
                 if any(v != 0 for v in t):

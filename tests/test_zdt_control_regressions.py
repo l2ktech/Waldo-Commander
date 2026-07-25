@@ -4,10 +4,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 from waldo_commander.components import control
 from waldo_commander import main as commander_main
 from waldo_commander.components.playback import PlaybackController
 from waldo_commander.operator_messages import operator_error
+from waldo_commander.services.urdf_scene.urdf_scene import _visual_mesh_scale
 
 
 def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
@@ -30,6 +32,18 @@ def test_pose_alignment_only_enters_virtual_scene(monkeypatch) -> None:
     panel._start_pose_alignment()
 
     assert calls == ["alignment", "notify"]
+
+
+def test_urdf_visual_mesh_scale_preserves_millimeter_gripper_scale() -> None:
+    visual = SimpleNamespace(
+        geometry=SimpleNamespace(geometry=SimpleNamespace(scale=np.array([0.001] * 3)))
+    )
+
+    assert _visual_mesh_scale(visual, 1.0) == (0.001, 0.001, 0.001)
+    assert _visual_mesh_scale(
+        SimpleNamespace(geometry=SimpleNamespace(geometry=SimpleNamespace(scale=None))),
+        1.0,
+    ) == (1.0, 1.0, 1.0)
 
 
 def test_zdt_speed_rating_spans_the_encodable_range() -> None:
