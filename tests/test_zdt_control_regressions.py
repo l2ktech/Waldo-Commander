@@ -33,6 +33,104 @@ def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
     assert commander_main._urdf_angle_signs("parol6") == [1] * 6
 
 
+def test_jog_enablement_uses_independent_safety_state_caches(monkeypatch) -> None:
+    """A joint refresh must not swallow the cartesian safety transition."""
+
+    class Element:
+        def __init__(self) -> None:
+            self.class_names: set[str] = set()
+
+        def classes(self, *, add: str | None = None, remove: str | None = None):
+            if add:
+                self.class_names.update(add.split())
+            if remove:
+                self.class_names.difference_update(remove.split())
+            return self
+
+    available = SimpleNamespace(
+        can_jog_pos=[True] * 6,
+        can_jog_neg=[True] * 6,
+    )
+    status = SimpleNamespace(
+        editing_mode=False,
+        simulator_active=True,
+        connected=False,
+        joints=SimpleNamespace(
+            can_jog_pos=[True] * 6,
+            can_jog_neg=[True] * 6,
+        ),
+        pose=SimpleNamespace(
+            cart_jog=SimpleNamespace(by_frame={"WRF": available, "TRF": available})
+        ),
+    )
+    monkeypatch.setattr(
+        control.waldoctl, "commander", SimpleNamespace(status=status)
+    )
+    monkeypatch.setattr(control, "_read_only_mode", lambda: False)
+    monkeypatch.setattr(control, "is_any_program_running", lambda: False)
+    monkeypatch.setattr(
+        control.ui_state,
+        "robot",
+        SimpleNamespace(
+            joints=SimpleNamespace(count=6),
+            cartesian_frames=("WRF", "TRF"),
+        ),
+    )
+
+    panel = object.__new__(control.ControlPanel)
+    panel._n_joints = 6
+    panel._joint_left_btns = {i: Element() for i in range(6)}
+    panel._joint_right_btns = {i: Element() for i in range(6)}
+    panel._cart_axis_imgs = {axis: Element() for axis in control._AXIS_ORDER}
+    panel._cart_slot_elems = {}
+    panel._last_joint_pos = None
+    panel._last_joint_neg = None
+    panel._last_cart_wrf_pos = None
+    panel._last_cart_wrf_neg = None
+    panel._last_cart_trf_pos = None
+    panel._last_cart_trf_neg = None
+    panel._last_joint_controls_available = None
+    panel._last_cart_controls_available = None
+
+    panel.refresh_joint_enablement()
+    panel.sync_cartesian_button_states()
+    assert all(
+        "cp-disabled-strong" not in elem.class_names
+        for elem in panel._cart_axis_imgs.values()
+    )
+
+    # These calls run in this exact order in the status consumer. Before the
+    # regression fix, the joint call updated a shared editing-mode cache and
+    # the cartesian call returned early with stale enabled visuals.
+    status.editing_mode = True
+    panel.refresh_joint_enablement()
+    panel.sync_cartesian_button_states()
+    assert all(
+        "cp-disabled-strong" in elem.class_names
+        for elem in panel._joint_left_btns.values()
+    )
+    assert all(
+        "cp-disabled-strong" in elem.class_names
+        for elem in panel._cart_axis_imgs.values()
+    )
+
+    # A silent hardware disconnect must also fail closed even when the
+    # backend's per-direction arrays have not changed.
+    status.editing_mode = False
+    status.simulator_active = False
+    status.connected = False
+    panel.refresh_joint_enablement()
+    panel.sync_cartesian_button_states()
+    assert all(
+        "cp-disabled-strong" in elem.class_names
+        for elem in panel._joint_right_btns.values()
+    )
+    assert all(
+        "cp-disabled-strong" in elem.class_names
+        for elem in panel._cart_axis_imgs.values()
+    )
+
+
 @pytest.mark.asyncio
 async def test_incremental_moves_reject_overlapping_clicks() -> None:
     panel = object.__new__(control.ControlPanel)

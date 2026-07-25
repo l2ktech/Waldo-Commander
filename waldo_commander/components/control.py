@@ -161,6 +161,42 @@ class _EStopManager:
         self._is_physical: bool = False
         self._last_io_state: int = 1
         self._digital_active: bool = False
+        self._reset_btn: ui.button | None = None
+        self._reset_in_progress: bool = False
+
+    async def reset_digital_stop(self) -> None:
+        """Reset an acknowledged digital stop without hiding failed recovery."""
+        if self._reset_in_progress:
+            return
+        if not self._digital_active:
+            return
+        if waldoctl.commander.status.io.estop == 0:
+            ui.notify(
+                "急停复位失败：实体急停仍处于触发状态。"
+                "处理方法：请先释放实体急停按钮。",
+                color="warning",
+            )
+            return
+        if not require_browser_control(ui_state.active_client_id):
+            return
+
+        self._reset_in_progress = True
+        if self._reset_btn is not None:
+            self._reset_btn.disable()
+        try:
+            result = await self._client.reset()
+            if result != 1:
+                raise RuntimeError("fault reset returned no acknowledgement")
+            self._digital_active = False
+            self.close()
+            ui.notify("急停已复位，运动按钮已恢复。", color="positive")
+        except Exception as error:
+            ui.notify(operator_error("急停复位", error), color="negative")
+            logger.warning("Reset after digital E-STOP failed: %s", error)
+        finally:
+            self._reset_in_progress = False
+            if self._reset_btn is not None and self._digital_active:
+                self._reset_btn.enable()
 
     def show(self, is_physical: bool) -> None:
         """Show E-STOP dialog with Lottie animation."""
@@ -202,24 +238,12 @@ class _EStopManager:
                     )
                     ui.label("机械臂已停止。确认现场安全后可执行复位。").classes("text-center")
 
-                    async def reset():
-                        try:
-                            await self._client.reset()
-                            self._digital_active = False
-                            if self._dialog:
-                                self._dialog.close()
-                                self._dialog = None
-                        except Exception as e:
-                            message = operator_error("急停复位", e)
-                            ui.notify(message, color="negative")
-                            logger.warning(
-                                "Reset after digital E-STOP failed: %s", e
-                            )
-
                     with ui.row().classes("gap-2 justify-center w-full mt-4"):
-                        ui.button("复位", on_click=reset).props(
-                            "color=positive size=lg"
-                        ).mark("btn-estop-resume")
+                        self._reset_btn = (
+                            ui.button("复位", on_click=self.reset_digital_stop)
+                            .props("color=positive size=lg")
+                            .mark("btn-estop-resume")
+                        )
 
             self._dialog.open()
 
@@ -233,6 +257,7 @@ class _EStopManager:
                 self._dialog.close()
                 self._dialog = None
                 self._is_physical = False
+                self._reset_btn = None
 
     def check_state_change(self) -> None:
         """Monitor ``commander.status.io.estop`` and show/hide dialog on transitions."""
@@ -757,6 +782,8 @@ class ControlPanel:
 
         # E-STOP manager (initialized with ui_client in build())
         self.estop: _EStopManager | None = None
+        self._estop_btn: ui.button | None = None
+        self._estop_action_lock = asyncio.Lock()
 
         # TCP TransformControls drag state
         self._tcp_latest_pose: list[float] | None = None
@@ -786,7 +813,8 @@ class ControlPanel:
         self._last_cart_wrf_neg: list[bool] | None = None
         self._last_cart_trf_pos: list[bool] | None = None
         self._last_cart_trf_neg: list[bool] | None = None
-        self._last_editing_mode: bool | None = None
+        self._last_joint_controls_available: bool | None = None
+        self._last_cart_controls_available: bool | None = None
         self._gizmo_auto_hidden: bool = (
             False  # True when gizmo hidden due to jog unavailable
         )
@@ -1100,42 +1128,46 @@ class ControlPanel:
         else:
             elem.classes(remove="cp-disabled-strong")
 
+    @staticmethod
+    def _jog_controls_available() -> bool:
+        """Return whether direct jog controls may currently accept input."""
+        status = waldoctl.commander.status
+        return (
+            not _read_only_mode()
+            and not status.editing_mode
+            and not is_any_program_running()
+            and (status.simulator_active or status.connected)
+        )
+
     def refresh_joint_enablement(self) -> None:
         """Apply stronger disabled visuals to joint +/- buttons using
         ``commander.status.joints.can_jog_pos / can_jog_neg``."""
-        editing_mode = waldoctl.commander.status.editing_mode
         joints = waldoctl.commander.status.joints
         pos = joints.can_jog_pos
         neg = joints.can_jog_neg
-
-        if _read_only_mode():
-            for btn in self._joint_left_btns.values():
-                self._set_strong_disabled(btn, True)
-            for btn in self._joint_right_btns.values():
-                self._set_strong_disabled(btn, True)
-            return
+        controls_available = self._jog_controls_available()
 
         # Skip if state unchanged. The producer swaps the lists wholesale only
         # on change, so identity comparison is a zero-alloc dirty check.
         if (
-            editing_mode == self._last_editing_mode
+            controls_available == self._last_joint_controls_available
             and pos is self._last_joint_pos
             and neg is self._last_joint_neg
         ):
             return
-        self._last_editing_mode = editing_mode
+        self._last_joint_controls_available = controls_available
         self._last_joint_pos = pos
         self._last_joint_neg = neg
 
-        # If in editing mode, disable all buttons regardless of normal enablement
-        if editing_mode:
+        if (
+            not controls_available
+            or len(pos) != self._n_joints
+            or len(neg) != self._n_joints
+        ):
             for btn in self._joint_left_btns.values():
                 self._set_strong_disabled(btn, True)
             for btn in self._joint_right_btns.values():
                 self._set_strong_disabled(btn, True)
-            return
-
-        if len(pos) != self._n_joints or len(neg) != self._n_joints:
             return
 
         n_joints = ui_state.active_robot.joints.count
@@ -1149,7 +1181,6 @@ class ControlPanel:
         Translation axes use WRF enablement, rotation axes use TRF enablement
         (matching the actual jog frame convention).
         """
-        editing_mode = waldoctl.commander.status.editing_mode
         frames = ui_state.active_robot.cartesian_frames
         wrf, trf = frames[0], frames[1]
         by_frame = waldoctl.commander.status.pose.cart_jog.by_frame
@@ -1159,33 +1190,26 @@ class ControlPanel:
         wrf_neg = av_wrf.can_jog_neg if av_wrf else None
         trf_pos = av_trf.can_jog_pos if av_trf else None
         trf_neg = av_trf.can_jog_neg if av_trf else None
-
-        if _read_only_mode():
-            for elem in self._cart_axis_imgs.values():
-                self._set_strong_disabled(elem, True)
-            for elem in self._cart_slot_elems.values():
-                self._set_strong_disabled(elem, True)
-            return
+        controls_available = self._jog_controls_available()
 
         # Identity dirty check against the four per-direction lists (the
         # producer swaps them wholesale only on change), so no per-tick
         # flatten / tuple allocation.
         if (
-            editing_mode == self._last_editing_mode
+            controls_available == self._last_cart_controls_available
             and wrf_pos is self._last_cart_wrf_pos
             and wrf_neg is self._last_cart_wrf_neg
             and trf_pos is self._last_cart_trf_pos
             and trf_neg is self._last_cart_trf_neg
         ):
             return
-        self._last_editing_mode = editing_mode
+        self._last_cart_controls_available = controls_available
         self._last_cart_wrf_pos = wrf_pos
         self._last_cart_wrf_neg = wrf_neg
         self._last_cart_trf_pos = trf_pos
         self._last_cart_trf_neg = trf_neg
 
-        # If in editing mode, disable all cartesian buttons regardless of normal enablement
-        if editing_mode:
+        if not controls_available:
             for ax in _AXIS_ORDER:
                 self._set_strong_disabled(self._cart_axis_imgs.get(ax), True)
             for elem in self._cart_slot_elems.values():
@@ -2184,10 +2208,24 @@ class ControlPanel:
             )
             return
 
-        await self.client.estop()
-        if self.estop:
-            self.estop._digital_active = True
-            self.estop.show(is_physical=False)
+        if self._estop_action_lock.locked():
+            return
+        async with self._estop_action_lock:
+            if self._estop_btn is not None:
+                self._estop_btn.disable()
+            try:
+                result = await self.client.estop()
+                if result != 1:
+                    raise RuntimeError("emergency stop returned no acknowledgement")
+                if self.estop:
+                    self.estop._digital_active = True
+                    self.estop.show(is_physical=False)
+            except Exception as error:
+                ui.notify(operator_error("软件停止", error), color="negative")
+                logger.warning("Digital E-STOP failed: %s", error)
+            finally:
+                if self._estop_btn is not None:
+                    self._estop_btn.enable()
 
     def render_jog_content(self) -> None:
         """Render jog controls (tabs + grids) and settings."""
@@ -2272,7 +2310,8 @@ class ControlPanel:
                                         suffix="°",
                                     )
                                     .props(
-                                        'dense borderless input-style="text-align:right;font-weight:bold"'
+                                        'dense borderless step="any" '
+                                        'input-style="text-align:right;font-weight:bold"'
                                     )
                                     .classes("joint-readout-input")
                                     .style("width:55px;")
@@ -2858,11 +2897,18 @@ class ControlPanel:
             with ui.element("div").style(
                 "width: 0; height: 0; overflow: visible; position: relative;"
             ):
-                ui.button(
-                    icon="dangerous", color="negative", on_click=self.on_estop_click
-                ).props("round unelevated").classes("glass-btn text-2xl").style(
-                    "position: absolute; top: -18px; left: 10px;"
-                ).tooltip("E-Stop (Esc)").mark("btn-estop")
+                self._estop_btn = (
+                    ui.button(
+                        icon="dangerous",
+                        color="negative",
+                        on_click=self.on_estop_click,
+                    )
+                    .props("round unelevated")
+                    .classes("glass-btn text-2xl")
+                    .style("position: absolute; top: -18px; left: 10px;")
+                    .tooltip("E-Stop (Esc)")
+                    .mark("btn-estop")
+                )
 
     def cleanup(self) -> None:
         """Cancel background timers during shutdown."""

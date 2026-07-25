@@ -27,8 +27,11 @@ from waldo_commander.services.programs import (
 )
 from waldo_commander.services.path_preview_client import PathPreviewClient
 from waldo_commander.services.motion_recorder import MotionRecorder
-from waldo_commander.services.path_visualizer import PathVisualizer
-from waldo_commander.services.urdf_scene.envelope_renderer import WorkspaceEnvelope
+from waldo_commander.services.path_visualizer import PathVisualizer, UNCHANGED
+from waldo_commander.services.urdf_scene.envelope_renderer import (
+    EnvelopeRenderer,
+    WorkspaceEnvelope,
+)
 
 
 # ============================================================================
@@ -599,6 +602,25 @@ class TestWorkspaceEnvelope:
         # Returns True because generation is in progress (valid state)
         assert result is True
 
+    def test_disabled_envelope_does_not_repeat_regeneration(self, monkeypatch):
+        """A disabled hull renderer is a stable no-op on tool refresh."""
+        from waldo_commander.services.urdf_scene import envelope_renderer as module
+
+        monkeypatch.setenv("WALDO_SKIP_ENVELOPE", "1")
+        needs_regeneration = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            module.workspace_envelope,
+            "needs_regeneration",
+            needs_regeneration,
+        )
+
+        renderer = object.__new__(EnvelopeRenderer)
+        renderer.envelope_object = None
+        renderer._envelope_visible = False
+        renderer._update_envelope_for_tool_change(0.0)
+
+        needs_regeneration.assert_not_called()
+
     @pytest.mark.parametrize(
         "offset,expected",
         [
@@ -884,6 +906,22 @@ class TestPathVisualizerIntegration:
 
         simulation_state._change_listeners.clear()
         ui_state.robot = old_robot
+
+    @pytest.mark.asyncio
+    async def test_cancelled_cpu_preview_keeps_existing_visualization(self):
+        """A page-teardown None result is cancellation, not a user error."""
+        with (
+            patch("waldo_commander.services.path_visualizer.run") as mock_run,
+            patch.object(simulation_state, "notify_changed"),
+        ):
+            mock_run.cpu_bound = AsyncMock(return_value=None)
+
+            result = await PathVisualizer().update_path_visualization(
+                "print('preview')",
+                tab_id="test-tab",
+            )
+
+        assert result == UNCHANGED
 
     @pytest.mark.asyncio
     async def test_visualizer_executes_simple_program(self):

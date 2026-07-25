@@ -10,6 +10,9 @@ exactly the code that broke.
 
 from __future__ import annotations
 
+from pathlib import Path
+import time
+
 import pytest
 import waldoctl
 from nicegui import Client, app
@@ -20,7 +23,9 @@ from nicegui.events import (
     KeyEventArguments,
 )
 from nicegui.testing import User
+from selenium.webdriver.common.action_chains import ActionChains
 
+from tests.helpers.browser_helpers import js, run_in_app
 from tests.helpers.wait import wait_for_app_ready
 
 
@@ -156,3 +161,53 @@ async def test_alt_m_cycles_mode_on_all_keyboard_layouts(user: User) -> None:
         )
     finally:
         set_control_mode(ControlMode.INSPECT)
+
+
+@pytest.mark.browser
+def test_jog_speed_shortcuts_work_when_page_body_has_focus(screen) -> None:
+    """Regression: ``[``/``]`` must work from the ordinary page body.
+
+    The direct callback test above covers the Python action. This browser test
+    covers the real DOM key event, NiceGUI websocket dispatch, focus detector,
+    and the visible control-panel state together.
+    """
+    screen.open("/", timeout=30.0)
+
+    def seed_speed() -> None:
+        cp = __import__("waldo_commander.state", fromlist=["ui_state"]).ui_state.control_panel
+        cp.adjust_rating("jog_speed", 50 - waldoctl.commander.settings.jog.speed)
+
+    run_in_app(seed_speed)
+    js(
+        screen,
+        """
+        const active = document.activeElement;
+        if (active && typeof active.blur === 'function') active.blur();
+        document.documentElement.tabIndex = -1;
+        document.documentElement.focus();
+        """,
+    )
+    assert not js(screen, "return window.KeybindingsFocusDetector.isBlocking()")
+
+    ActionChains(screen.selenium).send_keys("]").perform()
+    deadline = time.time() + 2
+    while (
+        run_in_app(lambda: waldoctl.commander.settings.jog.speed) != 60
+        and time.time() < deadline
+    ):
+        time.sleep(0.05)
+    assert run_in_app(lambda: waldoctl.commander.settings.jog.speed) == 60
+
+    ActionChains(screen.selenium).send_keys("[").perform()
+    deadline = time.time() + 2
+    while (
+        run_in_app(lambda: waldoctl.commander.settings.jog.speed) != 50
+        and time.time() < deadline
+    ):
+        time.sleep(0.05)
+    assert run_in_app(lambda: waldoctl.commander.settings.jog.speed) == 50
+    evidence_dir = Path(".gstack/qa-reports/screenshots")
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    screen.selenium.save_screenshot(
+        str(evidence_dir / "keyboard-speed-body-focus.png")
+    )

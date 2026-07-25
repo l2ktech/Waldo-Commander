@@ -91,12 +91,26 @@ class SettingsContent:
     def _fixed_zdt_backend() -> bool:
         return ui_state.active_robot.backend_package == "parol6_zdt_backend"
 
+    @staticmethod
+    def _active_backend_name() -> str:
+        """Return the installed backend entry-point that owns this process."""
+        package = ui_state.active_robot.backend_package
+        if package == "parol6_zdt_backend":
+            return "parol6_zdt"
+        return package
+
     def _build_fixed_connection(self) -> None:
         with _setting_row(
             "硬件连接",
             "由系统服务固定管理，页面无需选择串口或驱动",
         ):
             ui.label("SocketCAN · can0").classes("text-sm font-medium")
+
+    def _build_active_backend(self) -> None:
+        with _setting_row("Backend", "当前进程实际使用的机器人驱动"):
+            ui.label(f"{self._active_backend_name()}（运行中）").classes(
+                "text-sm font-medium"
+            ).mark("settings-active-backend")
 
     def _refresh_serial_ports(self) -> None:
         """Refresh the available serial ports in the dropdown."""
@@ -727,7 +741,11 @@ class SettingsContent:
             lambda: self._build_motion_profile(prefs),
             lambda: self._build_theme(prefs),
             self._build_reference_frames,
-            *([] if self._fixed_zdt_backend() else [self._build_backend_selector]),
+            *(
+                [self._build_active_backend]
+                if self._fixed_zdt_backend()
+                else [self._build_backend_selector]
+            ),
             self._build_plugin_panels,
             *([ai_control_section] if ai_control_section else []),
             self._build_mcp_server,

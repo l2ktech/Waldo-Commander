@@ -86,6 +86,18 @@ async def test_joint_jog_button_sends_jog_j(user: User) -> None:
 
 
 @pytest.mark.integration
+async def test_joint_readouts_accept_any_value_inside_soft_limits(user: User) -> None:
+    """Telemetry precision must not trigger native HTML stepMismatch."""
+    await user.open("/")
+    await wait_for_app_ready()
+
+    for index in range(6):
+        readout = next(iter(user.find(marker=f"joint-readout-{index}").elements))
+        assert readout._props["step"] == "any"
+        assert readout._props["min"] < readout._props["max"]
+
+
+@pytest.mark.integration
 async def test_cartesian_axis_disabled_when_at_limit(user: User) -> None:
     """Verify cartesian axis buttons become disabled when at workspace limits.
 

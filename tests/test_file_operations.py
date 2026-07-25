@@ -18,10 +18,17 @@ Dialog markers:
 """
 
 import asyncio
+from pathlib import Path
+import time
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from nicegui import ui
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+
+from tests.helpers.browser_helpers import click_tab, dismiss_dialogs, run_in_app
 
 if TYPE_CHECKING:
     from nicegui.testing import User
@@ -129,6 +136,31 @@ class TestFileOperations:
 
         assert len(waldoctl.commander.programs.items) == initial_tab_count + 1
 
+    async def test_open_program_does_not_start_path_simulation(
+        self, user: "User"
+    ) -> None:
+        """Opening a program is navigation; only edits explicitly auto-preview."""
+        from waldo_commander.state import ui_state
+
+        await user.open("/")
+        user.find(marker="tab-program").click()
+        await asyncio.sleep(0)
+
+        editor = ui_state.editor_panel
+        assert editor is not None
+        filename = "qa_open_without_preview.py"
+        path = editor.PROGRAM_DIR / filename
+        path.write_text("print('inspect only')\n", encoding="utf-8")
+        try:
+            with patch(
+                "waldo_commander.components.simulation_engine."
+                "simulation.schedule_debounced_simulation"
+            ) as schedule:
+                await editor.load_program(filename)
+            schedule.assert_not_called()
+        finally:
+            path.unlink(missing_ok=True)
+
     async def test_download_triggers(self, user: "User") -> None:
         """Download button in save dialog triggers a download."""
         await user.open("/")
@@ -173,3 +205,51 @@ def test_build_file_tree_ids_are_unique_for_same_named_files_in_nested_dirs(tmp_
     assert any("subdir" in i and "home.py" in i for i in ids), (
         f"Nested file ID must encode the subdir path; got {ids}"
     )
+
+
+@pytest.mark.browser
+def test_filename_manual_select_all_replaces_instead_of_appending(screen) -> None:
+    """Ctrl+A, clear, and type must replace the whole tab filename.
+
+    This distinguishes the application's behavior from automation tools that
+    deliberately append text when their caller does not select or clear first.
+    """
+    import waldoctl
+
+    screen.open("/", timeout=30.0)
+    dismiss_dialogs(screen)
+    click_tab(screen, "program")
+    active = run_in_app(lambda: waldoctl.commander.programs.active)
+    assert active is not None
+    original = active.filename
+    replacement = "qa_readonly_20260724.py"
+
+    inputs = screen.selenium.find_elements(By.CSS_SELECTOR, ".editor-tab input")
+    filename_input = next(element for element in inputs if element.is_displayed())
+    filename_input.click()
+    filename_input.send_keys(Keys.CONTROL, "a")
+    filename_input.send_keys(Keys.BACKSPACE)
+    filename_input.send_keys(replacement)
+    filename_input.send_keys(Keys.TAB)
+
+    deadline = time.time() + 2
+    while (
+        run_in_app(lambda: waldoctl.commander.programs.active.filename)
+        != replacement
+        and time.time() < deadline
+    ):
+        time.sleep(0.05)
+    try:
+        assert (
+            run_in_app(lambda: waldoctl.commander.programs.active.filename)
+            == replacement
+        )
+        evidence_dir = Path(".gstack/qa-reports/screenshots")
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        screen.selenium.save_screenshot(
+            str(evidence_dir / "filename-manual-replace.png")
+        )
+    finally:
+        run_in_app(
+            lambda: setattr(waldoctl.commander.programs.active, "filename", original)
+        )

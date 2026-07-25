@@ -729,6 +729,14 @@ class EnvelopeRenderer:
         Args:
             tool_offset_z: New tool Z offset in meters
         """
+        # Some deployments deliberately disable the expensive hull generator.
+        # In that mode ``needs_regeneration`` necessarily remains true, so every
+        # scene/tool refresh used to log the same impossible regeneration and
+        # reset the shared cache state.  Treat the disabled renderer as a
+        # stable no-op at the call boundary.
+        if os.environ.get("WALDO_SKIP_ENVELOPE"):
+            return
+
         if workspace_envelope.needs_regeneration(tool_offset_z):
             logger.info(
                 "Tool offset changed to %.4fm, regenerating workspace hull",

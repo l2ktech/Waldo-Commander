@@ -105,6 +105,100 @@ async def test_digital_estop_reset_failure_is_visible(
     await user.should_see("软件停止已触发")
 
 
+@pytest.mark.integration
+async def test_digital_estop_failure_does_not_offer_reset(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    from waldo_commander.state import ui_state
+
+    async def fail_estop() -> int:
+        raise RuntimeError("safety halt unavailable")
+
+    monkeypatch.setattr(ui_state.control_panel.client, "estop", fail_estop)
+    user.find(marker="btn-estop").click()
+
+    await user.should_see("软件停止失败")
+    await user.should_see("处理方法")
+    assert not ui_state.control_panel.estop._digital_active
+    assert ui_state.control_panel.estop._dialog is None
+
+
+@pytest.mark.integration
+async def test_digital_estop_requires_acknowledgement(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    from waldo_commander.state import ui_state
+
+    async def unacknowledged_estop() -> int:
+        return 0
+
+    monkeypatch.setattr(
+        ui_state.control_panel.client, "estop", unacknowledged_estop
+    )
+    user.find(marker="btn-estop").click()
+
+    await user.should_see("软件停止失败")
+    assert not ui_state.control_panel.estop._digital_active
+    assert ui_state.control_panel.estop._dialog is None
+
+
+@pytest.mark.integration
+async def test_digital_estop_reset_requires_acknowledgement(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    from waldo_commander.state import ui_state
+
+    async def unacknowledged_reset() -> int:
+        return 0
+
+    user.find(marker="btn-estop").click()
+    await user.should_see("软件停止已触发")
+    monkeypatch.setattr(ui_state.control_panel.client, "reset", unacknowledged_reset)
+    user.find(marker="btn-estop-resume").click()
+
+    await user.should_see("急停复位失败")
+    await user.should_see("软件停止已触发")
+    assert ui_state.control_panel.estop._digital_active
+    assert ui_state.control_panel.estop._dialog is not None
+
+
+@pytest.mark.integration
+async def test_reset_is_blocked_while_physical_estop_is_active(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    import waldoctl
+    from waldo_commander.state import ui_state
+
+    reset_calls = 0
+
+    async def tracked_reset() -> int:
+        nonlocal reset_calls
+        reset_calls += 1
+        return 1
+
+    user.find(marker="btn-estop").click()
+    await user.should_see("软件停止已触发")
+    monkeypatch.setattr(ui_state.control_panel.client, "reset", tracked_reset)
+    waldoctl.commander.status.io.estop = 0
+    user.find(marker="btn-estop-resume").click()
+
+    await user.should_see("实体急停仍处于触发状态")
+    assert reset_calls == 0
+    assert ui_state.control_panel.estop._digital_active
+
+
 @pytest.mark.unit
 async def test_mode_switch_stops_running_script(tmp_path) -> None:
     """Switching between simulator and robot modes should stop any running user script.

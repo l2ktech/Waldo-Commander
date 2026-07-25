@@ -11,7 +11,6 @@ from nicegui import ui
 import waldoctl
 from waldoctl import Program
 
-from waldo_commander.components.simulation_engine import simulation
 from waldo_commander.operator_messages import operator_error
 
 logger = logging.getLogger(__name__)
@@ -65,10 +64,11 @@ class FileOperationsMixin:
             program = waldoctl.commander.programs.open(file_path)
             self._switch_to_tab(program.id)
             self._update_dirty_dot(program)
-            # A freshly opened program has an empty dry_run; schedule the
-            # debounced path sim so the 3D preview reflects it without an edit
-            # (mirrors _new_tab).
-            simulation.schedule_debounced_simulation(tab_id=program.id)
+            # Opening a file is navigation, not an edit or an explicit preview
+            # request.  In particular, large programs must not unexpectedly
+            # consume a process-pool worker merely because the user inspected
+            # them.  The first edit (or the playback control) still starts the
+            # normal path-preview flow.
             logger.info("Loaded program %s", name)
         except Exception as e:
             ui.notify(operator_error("程序加载", e), color="negative", timeout=6000)

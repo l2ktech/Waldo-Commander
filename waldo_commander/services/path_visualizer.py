@@ -638,10 +638,15 @@ class PathVisualizer:
                     logger.error("Sync simulation also failed: %s", e2)
                     return f"Simulation failed: {e2}"
 
-            # A None result can happen during shutdown/test teardown.
+            # NiceGUI's cpu_bound wrapper can resolve to None when its owning
+            # client/timer is cancelled during page teardown.  That is a
+            # cancelled preview, not a simulation failure: keep the current
+            # visualization and avoid emitting a misleading operator error.
             if result is None:
-                logger.warning("Simulation returned None result (sim_id=%d)", sim_id)
-                return "Simulation returned no result"
+                logger.debug(
+                    "Simulation cancelled without a result (sim_id=%d)", sim_id
+                )
+                return UNCHANGED
 
             if result.get("error"):
                 logger.error(

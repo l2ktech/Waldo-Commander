@@ -26,6 +26,7 @@ def test_zdt_backend_uses_fixed_socketcan_connection(monkeypatch) -> None:
     )
 
     assert SettingsContent._fixed_zdt_backend() is True
+    assert SettingsContent._active_backend_name() == "parol6_zdt"
 
 
 @pytest.mark.integration

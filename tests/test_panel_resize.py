@@ -4,6 +4,7 @@ All tests share a single browser session and page load via class_screen fixture.
 """
 
 import json
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING
 
@@ -239,3 +240,68 @@ class TestPanelResize:
 
         final_height = bottom.rect["height"]
         assert abs(final_height - after_switch_height) < 30
+
+    @pytest.mark.parametrize(
+        ("width", "height"),
+        [(1600, 900), (1440, 900), (1366, 768), (1280, 720), (1024, 768)],
+    )
+    def test_panels_stay_inside_common_desktop_viewports(
+        self, class_screen: "Screen", width: int, height: int
+    ) -> None:
+        """Open and drag panels without clipping common desktop viewports."""
+        wait_ready(class_screen)
+        class_screen.selenium.set_window_size(width, height)
+        clear_storage(class_screen, STORAGE_KEY)
+        click_tab(class_screen, "program")
+        click_tab(class_screen, "log")
+
+        drag(class_screen, ".program-panel .resize-handle-right", dx=60)
+        drag(class_screen, ".response-panel .resize-handle-top", dy=-30)
+
+        geometry = js(
+            class_screen,
+            """
+            const selectors = [
+              '.program-panel',
+              '.response-panel',
+              '.top-panels-container',
+              '.bottom-panels-container',
+            ];
+            return {
+              innerWidth: window.innerWidth,
+              innerHeight: window.innerHeight,
+              scrollWidth: document.documentElement.scrollWidth,
+              rects: Object.fromEntries(selectors.map(selector => {
+                const element = document.querySelector(selector);
+                if (!element) return [selector, null];
+                const rect = element.getBoundingClientRect();
+                return [selector, {
+                  left: rect.left, top: rect.top, right: rect.right,
+                  bottom: rect.bottom, width: rect.width, height: rect.height,
+                }];
+              })),
+            };
+            """,
+        )
+        try:
+            assert geometry["scrollWidth"] <= geometry["innerWidth"] + 1, geometry
+            for selector, rect in geometry["rects"].items():
+                assert rect is not None, f"{selector} missing at {width}x{height}"
+                assert rect["left"] >= -1, (selector, geometry)
+                assert rect["right"] <= geometry["innerWidth"] + 1, (
+                    selector,
+                    geometry,
+                )
+                assert rect["top"] >= -1, (selector, geometry)
+                assert rect["bottom"] <= geometry["innerHeight"] + 1, (
+                    selector,
+                    geometry,
+                )
+
+            evidence_dir = Path(".gstack/qa-reports/screenshots")
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            class_screen.selenium.save_screenshot(
+                str(evidence_dir / f"panel-responsive-{width}x{height}.png")
+            )
+        finally:
+            class_screen.selenium.set_window_size(1920, 1080)

@@ -471,6 +471,8 @@ async def check_ping() -> None:
     if readout_panel is not None:
         readout_panel.update_conn_io()
     if control_panel is not None:
+        control_panel.refresh_joint_enablement()
+        control_panel.sync_cartesian_button_states()
         control_panel.sync_gizmo_for_jog_state()
         control_panel.refresh_control_indicator()
 
@@ -1184,7 +1186,7 @@ def _register_handlers() -> None:
     async def _restore_settings() -> None:
         """Restore persisted motion profile and tool selection."""
         if skip_startup_commands:
-            logger.info("Skipping motion profile startup command")
+            logger.info("Skipping motion profile/tool startup commands")
         else:
             try:
                 saved_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")
@@ -1193,22 +1195,24 @@ def _register_handlers() -> None:
             except Exception as e:
                 logger.warning("startup: select_profile failed: %s", e)
 
-        try:
-            saved_tool = ng_app.storage.general.get("selected_tool", "")
-            if saved_tool:
-                # initialize_urdf_scene already reads the same variant
-                # storage key when wiring the scene mesh; pass it to
-                # select_tool too so the controller's per-variant TCP
-                # matches the scene on first boot.
-                saved_variant = ng_app.storage.general.get(
-                    f"tool_variant_{saved_tool}", ""
-                )
-                await client.select_tool(saved_tool, variant_key=saved_variant)
-                logger.debug(
-                    "startup: set tool to %s (variant=%r)", saved_tool, saved_variant
-                )
-        except Exception as e:
-            logger.warning("startup: select_tool failed: %s", e)
+            try:
+                saved_tool = ng_app.storage.general.get("selected_tool", "")
+                if saved_tool:
+                    # initialize_urdf_scene already reads the same variant
+                    # storage key when wiring the scene mesh; pass it to
+                    # select_tool too so the controller's per-variant TCP
+                    # matches the scene on first boot.
+                    saved_variant = ng_app.storage.general.get(
+                        f"tool_variant_{saved_tool}", ""
+                    )
+                    await client.select_tool(saved_tool, variant_key=saved_variant)
+                    logger.debug(
+                        "startup: set tool to %s (variant=%r)",
+                        saved_tool,
+                        saved_variant,
+                    )
+            except Exception as e:
+                logger.warning("startup: select_tool failed: %s", e)
 
         # Adopt the controller's applied collision world (installation shapes
         # exist even with no program loaded — the GUI must ask, not push).

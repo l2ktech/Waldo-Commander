@@ -1,0 +1,47 @@
+{
+  "schema": "waldo-commander/qa-baseline/v1",
+  "captured_at": "2026-07-24T15:40:00-10:00",
+  "revision_under_test": "working-tree-before-final-commit",
+  "health_score": 93,
+  "services": {
+    "robot_url": "http://127.0.0.1:8011/",
+    "simulator_url": "http://127.0.0.1:8012/",
+    "robot_http_status": 200,
+    "simulator_http_status": 200
+  },
+  "hardware_terminal": {
+    "runtime_state": "NO_MOTION",
+    "safety_state": "STOPPED",
+    "connected": true,
+    "grant": null,
+    "lease": null,
+    "axes_fresh": 6,
+    "axes_enabled": 6,
+    "axes_zero_velocity": 6,
+    "axes_faulted": 0
+  },
+  "safety_cycle": {
+    "estop_ack": 1,
+    "estop_terminal": "SAFE_TERMINAL",
+    "estop_safety_state": "STOPPED",
+    "reset_ack": 1,
+    "reset_terminal": "NO_MOTION",
+    "all_axes_zero_velocity": true
+  },
+  "verification": {
+    "integrated_targeted_tests": {
+      "passed": 37,
+      "failed": 0
+    },
+    "browser_flows": {
+      "keyboard_speed_body_focus": "PASS",
+      "filename_manual_replace": "PASS",
+      "panel_drag_resize_1024x768": "PASS"
+    }
+  },
+  "remaining_limits": [
+    "No physical motion was requested by this QA pass.",
+    "The additional 1600x900, 1440x900, 1366x768 and 1280x720 responsive cases are implemented but not executed in this pass.",
+    "GitHub push is blocked by upstream HTTP 403 permissions."
+  ]
+}
