@@ -106,6 +106,7 @@ class EditingMixin:
         self._edit_bar_mode_toggle: Any | None = None
         self._edit_bar_container: Any | None = None
         self._current_editing_type: str | None = None
+        self._pose_alignment_mode: bool = False
 
         self._cached_joint_axes_letters: list[str] | None = None
 
@@ -139,6 +140,33 @@ class EditingMixin:
             self._tcp_ball.material(SceneColors.TCP_ACTIVE_HEX, 0.9)
         self._update_tcp_ball_position()
         self.enable_tcp_transform_controls("translate")
+
+    def start_pose_alignment(self) -> None:
+        """Let the operator visually align the virtual arm without moving hardware."""
+        if self._editing_unified_target:
+            return
+
+        initial_angles = self._get_robot_angles_rad()
+        self._pose_alignment_mode = True
+        self._editing_unified_target = True
+        self._editing_target_id = None
+        self._unified_target_mode = "joint"
+        self._joint_ring_touched = True
+        self._original_editing_joints = [math.degrees(a) for a in initial_angles]
+        self.enter_editing_mode(initial_angles)
+        self._create_edit_bar("pose_alignment")
+
+        async def enable_controls() -> None:
+            await asyncio.sleep(0.15)
+            if not self._pose_alignment_mode:
+                return
+            self._disable_joint_transform_controls()
+            self.disable_tcp_transform_controls()
+            self._enable_joint_transform_controls()
+            self._sync_robot_state_from_editing()
+
+        with self.scene:
+            ui.timer(0.0, enable_controls, once=True)
 
     def exit_editing_mode(self) -> None:
         """Exit editing mode and restore pre-edit state."""
@@ -529,6 +557,7 @@ class EditingMixin:
         self._joint_ring_touched = False
         self._original_editing_joints = None
         self._original_editing_pose = None
+        self._pose_alignment_mode = False
         self._cleanup_editing()
         self._hide_edit_bar()
         self.exit_editing_mode()
@@ -586,6 +615,7 @@ class EditingMixin:
             "joint": "Editing Joint Target",
             "unified": "Place Target",
             "pose_edit": "Editing Target Position",
+            "pose_alignment": "人工姿态对齐（仅调整虚拟模型）",
         }
         self._edit_bar_label.text = labels.get(editing_type, "Editing Target")
 
@@ -595,7 +625,7 @@ class EditingMixin:
             return
         self._edit_bar_values.clear()
 
-        if not self._editing_target_id:
+        if not self._editing_target_id and editing_type != "pose_alignment":
             return
 
         def fmt(delta: float, unit: str = "") -> str:
@@ -609,7 +639,7 @@ class EditingMixin:
             return "text-green-400" if delta > 0 else "text-red-400"
 
         with self._edit_bar_values:
-            show_joints = editing_type == "joint" or (
+            show_joints = editing_type in {"joint", "pose_alignment"} or (
                 editing_type == "unified" and self._unified_target_mode == "joint"
             )
 
@@ -619,6 +649,11 @@ class EditingMixin:
                 angles_deg = list(waldoctl.commander.status.joints.angles.deg[:n])
                 orig_deg = self._original_editing_joints or [0.0] * n
                 for i, angle in enumerate(angles_deg):
+                    if editing_type == "pose_alignment":
+                        ui.label(f"J{i + 1}: {angle:.2f}°").classes(
+                            "text-xs font-mono whitespace-nowrap text-white"
+                        )
+                        continue
                     delta = angle - orig_deg[i]
                     ui.label(f"ΔJ{i + 1}: {fmt(delta, '°')}").classes(
                         f"text-xs font-mono whitespace-nowrap {color(delta)}"
@@ -663,6 +698,31 @@ class EditingMixin:
     def _on_edit_bar_confirm(self) -> None:
         """Handle confirm button."""
         if not self._editing_unified_target:
+            return
+        if self._pose_alignment_mode:
+            angles = list(
+                waldoctl.commander.status.joints.angles.deg[: len(self.joint_names)]
+            )
+            text = ", ".join(
+                f"J{i + 1}={angle:.2f}°" for i, angle in enumerate(angles)
+            )
+            self._end_editing_session()
+            dialog = ui.dialog()
+            with dialog, ui.card().classes("min-w-[520px]"):
+                ui.label("人工姿态估算结果").classes("text-lg font-medium")
+                ui.label(text).classes("font-mono")
+                ui.label(
+                    "该结果来自人工视觉对齐，不会写入硬件零点，也不能替代输出侧编码器。"
+                ).classes("text-sm text-gray-400")
+                with ui.row().classes("justify-end w-full"):
+                    ui.button(
+                        "复制角度",
+                        on_click=lambda: ui.run_javascript(
+                            f"navigator.clipboard.writeText({text!r})"
+                        ),
+                    )
+                    ui.button("关闭", on_click=dialog.close).props("flat")
+            dialog.open()
             return
         if self._unified_target_mode == "joint":
             self._confirm_unified_as_joint()

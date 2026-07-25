@@ -15,6 +15,23 @@ def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
     assert control.ControlPanel.EXACT_MOVE_TIMEOUT_S == 120.0
 
 
+def test_pose_alignment_only_enters_virtual_scene(monkeypatch) -> None:
+    calls: list[str] = []
+    scene = SimpleNamespace(start_pose_alignment=lambda: calls.append("alignment"))
+    monkeypatch.setattr(control.ui_state, "urdf_scene", scene)
+    monkeypatch.setattr(control, "is_any_program_running", lambda: False)
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda *args, **kwargs: calls.append("notify"),
+    )
+
+    panel = object.__new__(control.ControlPanel)
+    panel._start_pose_alignment()
+
+    assert calls == ["alignment", "notify"]
+
+
 def test_zdt_speed_rating_spans_the_encodable_range() -> None:
     assert control._normalized_speed(10, "parol6_zdt_backend") == pytest.approx(0.1)
     assert control._normalized_speed(50, "parol6_zdt_backend") == pytest.approx(0.5)

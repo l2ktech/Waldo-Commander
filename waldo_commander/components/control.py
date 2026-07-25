@@ -2252,6 +2252,21 @@ class ControlPanel:
                 if self._fault_reset_btn is not None:
                     self._fault_reset_btn.enable()
 
+    def _start_pose_alignment(self) -> None:
+        """Open virtual-only joint alignment; never acquire motion authority."""
+        scene = ui_state.urdf_scene
+        if scene is None:
+            ui.notify("3D模型尚未加载，请稍后重试。", color="warning")
+            return
+        if is_any_program_running():
+            ui.notify("程序运行期间不能调整虚拟姿态，请先停止程序。", color="warning")
+            return
+        scene.start_pose_alignment()
+        ui.notify(
+            "已进入姿态对齐：拖动各关节旋转环；此模式不会控制真实机械臂。",
+            color="info",
+        )
+
     def render_jog_content(self) -> None:
         """Render jog controls (tabs + grids) and settings."""
         with ui.tabs().props("dense").classes("cp-jog-tabs") as jog_mode_tabs:
@@ -2290,6 +2305,15 @@ class ControlPanel:
         ):
             # Joint jog panel
             with ui.tab_panel(joint_tab).classes("gap-1"):
+                with ui.row().classes("items-center justify-between w-full"):
+                    ui.label("关节角度").classes("text-xs text-gray-400")
+                    ui.button(
+                        "姿态对齐",
+                        icon="3d_rotation",
+                        on_click=self._start_pose_alignment,
+                    ).props("dense flat no-caps").tooltip(
+                        "只调整3D模型并估算六轴角度，不会控制真实机械臂"
+                    ).mark("btn-pose-alignment")
                 joint_names = list(ui_state.active_robot.joints.names)
 
                 def make_joint_row(idx: int, name: str):
