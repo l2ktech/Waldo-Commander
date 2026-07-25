@@ -353,6 +353,11 @@ async def test_incremental_move_auto_recovers_incomplete_authority(monkeypatch) 
             "上一条停止命令仍在收尾",
             "等待停止完成并自动复位",
         ),
+        (
+            "OFFICIAL_TRAJECTORY_INVALID: Joint 2 target (-148.4 deg) is out of range",
+            "目标超出当前关节允许范围",
+            "页面应自动禁用该方向",
+        ),
     ],
 )
 def test_operator_errors_are_chinese_and_actionable(

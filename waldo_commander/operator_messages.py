@@ -34,6 +34,12 @@ def operator_error(action: str, error: BaseException | str) -> str:
     elif "lease" in normalized:
         reason = "页面控制授权已失效"
         solution = "请点击“恢复控制”自动回收旧授权；无需重启或修改代码"
+    elif "joint " in normalized and "target" in normalized and "out of range" in normalized:
+        reason = "目标超出当前关节允许范围"
+        solution = "页面应自动禁用该方向；请反向移动，或使用已确认的停车位按钮"
+    elif "official_trajectory_invalid" in normalized:
+        reason = "运动轨迹未能通过规划校验"
+        solution = "请确认目标仍在实体软限位内；页面会保持停止状态，不会继续发送动作"
     elif "soft limit" in normalized or "signed maximum delta" in normalized:
         reason = "目标接近软限位或单次位移过大"
         solution = "请反向移动、减小步长或使用分段移动"
