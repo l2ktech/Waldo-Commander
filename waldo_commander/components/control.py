@@ -2225,8 +2225,9 @@ class ControlPanel:
         """Toggle between robot and simulator modes and update URDF appearance."""
         if ui_state.active_robot.backend_package == "parol6_zdt_backend":
             await ui.run_javascript(
-                "window.location.assign("
-                "window.location.protocol + '//' + window.location.hostname + ':8012/'"
+                "window.open("
+                "window.location.protocol + '//' + window.location.hostname + ':8012/', "
+                "'_blank', 'noopener,noreferrer'"
                 ")"
             )
             return

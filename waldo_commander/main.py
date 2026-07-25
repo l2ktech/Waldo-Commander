@@ -1192,6 +1192,16 @@ def _register_handlers() -> None:
             await client.reset()
         except Exception as e:
             logger.warning("startup: reset failed (may retry): %s", e)
+        if os.environ.get("WALDO_SIMULATOR_ONLY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            try:
+                await client.home()
+            except Exception as e:
+                logger.warning("startup: simulator home failed: %s", e)
 
     async def _restore_settings() -> None:
         """Restore persisted motion profile and tool selection."""

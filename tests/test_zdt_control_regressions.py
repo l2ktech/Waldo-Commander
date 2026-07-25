@@ -485,6 +485,8 @@ async def test_zdt_backend_opens_isolated_simulator_before_client_call(
 
     assert len(scripts) == 1
     assert ":8012/" in scripts[0]
+    assert "window.open(" in scripts[0]
+    assert "_blank" in scripts[0]
 
 
 def test_non_loopback_primary_browser_is_distinct_from_local_automation() -> None:
