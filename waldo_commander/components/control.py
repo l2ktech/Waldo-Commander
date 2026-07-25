@@ -784,6 +784,8 @@ class ControlPanel:
         self.estop: _EStopManager | None = None
         self._estop_btn: ui.button | None = None
         self._estop_action_lock = asyncio.Lock()
+        self._fault_reset_btn: ui.button | None = None
+        self._fault_reset_action_lock = asyncio.Lock()
 
         # TCP TransformControls drag state
         self._tcp_latest_pose: list[float] | None = None
@@ -2227,6 +2229,34 @@ class ControlPanel:
                 if self._estop_btn is not None:
                     self._estop_btn.enable()
 
+    async def on_fault_reset_click(self) -> None:
+        """Recover a confirmed-stopped software fault without restarting services."""
+        if waldoctl.commander.status.io.estop == 0:
+            ui.notify(
+                "控制恢复失败：实体急停仍处于触发状态。"
+                "处理方法：请先释放实体急停按钮。",
+                color="warning",
+            )
+            return
+        if not require_browser_control(ui_state.active_client_id):
+            return
+        if self._fault_reset_action_lock.locked():
+            return
+        async with self._fault_reset_action_lock:
+            if self._fault_reset_btn is not None:
+                self._fault_reset_btn.disable()
+            try:
+                result = await self.client.reset()
+                if result != 1:
+                    raise RuntimeError("fault reset returned no acknowledgement")
+                ui.notify("控制故障已复位，运动按钮已恢复。", color="positive")
+            except Exception as error:
+                ui.notify(operator_error("控制恢复", error), color="negative")
+                logger.warning("Operator fault reset failed: %s", error)
+            finally:
+                if self._fault_reset_btn is not None:
+                    self._fault_reset_btn.enable()
+
     def render_jog_content(self) -> None:
         """Render jog controls (tabs + grids) and settings."""
         with ui.tabs().props("dense").classes("cp-jog-tabs") as jog_mode_tabs:
@@ -2897,6 +2927,22 @@ class ControlPanel:
             with ui.element("div").style(
                 "width: 0; height: 0; overflow: visible; position: relative;"
             ):
+                self._fault_reset_btn = (
+                    ui.button(
+                        icon="restart_alt",
+                        color="positive",
+                        on_click=self.on_fault_reset_click,
+                    )
+                    .props("round unelevated dense")
+                    .classes("glass-btn text-xl")
+                    .style("position: absolute; top: -18px; left: 10px;")
+                    .tooltip("恢复控制：清除已确认停止的软件故障")
+                    .mark("btn-fault-reset")
+                )
+
+            with ui.element("div").style(
+                "width: 0; height: 0; overflow: visible; position: relative;"
+            ):
                 self._estop_btn = (
                     ui.button(
                         icon="dangerous",
@@ -2905,7 +2951,7 @@ class ControlPanel:
                     )
                     .props("round unelevated")
                     .classes("glass-btn text-2xl")
-                    .style("position: absolute; top: -18px; left: 10px;")
+                    .style("position: absolute; top: -18px; left: 58px;")
                     .tooltip("E-Stop (Esc)")
                     .mark("btn-estop")
                 )

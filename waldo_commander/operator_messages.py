@@ -19,6 +19,9 @@ def operator_error(action: str, error: BaseException | str) -> str:
     elif "terminal target error" in normalized:
         reason = "机械臂已安全停止，但自动终点纠偏后仍未达到目标"
         solution = "请降低页面速度或加速度后重试；若持续出现，请停止操作并检查机械负载"
+    elif "stable terminal encoder sampling deadline expired" in normalized:
+        reason = "机械臂已停止，但终点编码器稳定采样未在规定时间内完成"
+        solution = "请点击页面上的“恢复控制”，再降低速度或步长后重试"
     elif "selected-axes speed must be at least" in normalized:
         reason = "当前速度低于驱动器可执行的最小速度"
         solution = "请将页面速度提高一档后重试"

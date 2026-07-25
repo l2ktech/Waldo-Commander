@@ -83,6 +83,29 @@ async def test_digital_estop_dialog_behavior(user: User) -> None:
 
 
 @pytest.mark.integration
+async def test_operator_fault_reset_button_recovers_control(
+    user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await user.open("/")
+    await wait_for_app_ready()
+
+    from waldo_commander.state import ui_state
+
+    calls = 0
+
+    async def reset() -> int:
+        nonlocal calls
+        calls += 1
+        return 1
+
+    monkeypatch.setattr(ui_state.control_panel.client, "reset", reset)
+    user.find(marker="btn-fault-reset").click()
+
+    await user.should_see("控制故障已复位，运动按钮已恢复")
+    assert calls == 1
+
+
+@pytest.mark.integration
 async def test_digital_estop_reset_failure_is_visible(
     user: User, monkeypatch: pytest.MonkeyPatch
 ) -> None:

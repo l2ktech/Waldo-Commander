@@ -227,6 +227,11 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
             "动作等待超时，系统已执行停止",
             "请降低速度或步长",
         ),
+        (
+            "stable terminal encoder sampling deadline expired",
+            "终点编码器稳定采样未在规定时间内完成",
+            "请点击页面上的“恢复控制”",
+        ),
     ],
 )
 def test_operator_errors_are_chinese_and_actionable(
