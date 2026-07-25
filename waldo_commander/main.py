@@ -130,6 +130,8 @@ class _PageState:
 
 
 _page_state: _PageState | None = None
+_TAKEOVER_TOKEN_TTL_S = 15.0
+_pending_takeovers: dict[str, tuple[str, float]] = {}
 
 # Pre-allocated buffers for numba pipelines (scratch space)
 _rotation_matrix_buffer: np.ndarray = np.zeros((3, 3), dtype=np.float64)
@@ -1484,6 +1486,7 @@ def _build_takeover_overlay(message: str) -> None:
     ui.add_head_html('<script src="/static/js/robot-faces.js" defer></script>')
 
     def take_control() -> None:
+        takeover_token = _issue_takeover_token(c)
         held_id = ui_state.active_client_id
         held_client = Client.instances.get(held_id) if held_id is not None else None
         if held_client is not None and held_client is not c:
@@ -1491,7 +1494,9 @@ def _build_takeover_overlay(message: str) -> None:
             control_lease.release(BROWSER, held_client.id)
         ui_state.active_client_id = None
         ui_state.active_page_token = None
-        ui.run_javascript("window.location.replace('/')")
+        ui.run_javascript(
+            f"window.location.replace('/?takeover={takeover_token}')"
+        )
 
     with ui.column().classes(
         "fixed inset-0 z-[9999] items-center justify-center bg-black/60"
@@ -1571,6 +1576,43 @@ def _browser_client_description(page_client: Client | None) -> str:
     return f"{host} · {browser} · 标签页 {str(tab_id)[:8]}"
 
 
+def _client_host(page_client: Client | None) -> str:
+    if page_client is None:
+        return ""
+    request_client = getattr(page_client.request, "client", None)
+    return str(getattr(request_client, "host", ""))
+
+
+def _issue_takeover_token(page_client: Client) -> str:
+    now = time.monotonic()
+    expired = [
+        token
+        for token, (_host, expires_at) in _pending_takeovers.items()
+        if expires_at <= now
+    ]
+    for token in expired:
+        _pending_takeovers.pop(token, None)
+    token = secrets.token_urlsafe(24)
+    _pending_takeovers[token] = (
+        _client_host(page_client),
+        now + _TAKEOVER_TOKEN_TTL_S,
+    )
+    return token
+
+
+def _consume_takeover_token(token: str | None, page_client: Client) -> bool:
+    if not token:
+        return False
+    issued = _pending_takeovers.pop(token, None)
+    if issued is None:
+        return False
+    expected_host, expires_at = issued
+    return (
+        expires_at > time.monotonic()
+        and expected_host == _client_host(page_client)
+    )
+
+
 def _client_is_browser_navigation(page_client: Client | None) -> bool:
     """Return whether the request is a real browser document navigation.
 
@@ -1606,7 +1648,13 @@ async def index_page():
     # the slot. Worker-side command ownership still prevents overlapping moves.
     held_id = ui_state.active_client_id
     held_client = Client.instances.get(held_id) if held_id is not None else None
-    is_browser_navigation = _client_is_browser_navigation(this_client)
+    takeover_authorized = _consume_takeover_token(
+        this_client.request.query_params.get("takeover"),
+        this_client,
+    )
+    is_browser_navigation = (
+        takeover_authorized or _client_is_browser_navigation(this_client)
+    )
     logger.debug(
         "Page ownership: client=%s tab=%s held=%s held_tab=%s referer=%s cache=%s",
         this_client.id,
@@ -1676,6 +1724,7 @@ async def index_page():
             f"""
             (() => {{
               const url = new URL(window.location.href);
+              url.searchParams.delete('takeover');
               if (url.searchParams.get('waldo_tab') !== {page_token!r}) {{
                 url.searchParams.set('waldo_tab', {page_token!r});
                 history.replaceState(history.state, '', url);

@@ -383,6 +383,31 @@ def test_browser_holder_description_includes_device_browser_and_tab() -> None:
     )
 
 
+def test_takeover_token_is_host_bound_short_lived_and_single_use(monkeypatch) -> None:
+    now = 100.0
+    monkeypatch.setattr(commander_main.time, "monotonic", lambda: now)
+    commander_main._pending_takeovers.clear()
+
+    def page(host: str):
+        return SimpleNamespace(
+            request=SimpleNamespace(client=SimpleNamespace(host=host))
+        )
+
+    source = page("192.168.1.186")
+    token = commander_main._issue_takeover_token(source)
+
+    assert commander_main._consume_takeover_token(token, page("192.168.1.5")) is False
+    assert commander_main._consume_takeover_token(token, source) is False
+
+    token = commander_main._issue_takeover_token(source)
+    assert commander_main._consume_takeover_token(token, source) is True
+    assert commander_main._consume_takeover_token(token, source) is False
+
+    token = commander_main._issue_takeover_token(source)
+    now += commander_main._TAKEOVER_TOKEN_TTL_S + 0.1
+    assert commander_main._consume_takeover_token(token, source) is False
+
+
 def test_only_real_browser_navigation_can_reserve_primary_slot(monkeypatch) -> None:
     monkeypatch.delitem(commander_main.sys.modules, "pytest", raising=False)
 

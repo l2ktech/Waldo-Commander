@@ -107,7 +107,8 @@ def test_takeover_overlay_offers_explicit_control_recovery() -> None:
 
     assert "接管控制" in source
     assert "control_lease.release(BROWSER, held_client.id)" in source
-    assert "window.location.replace('/')" in source
+    assert "_issue_takeover_token(c)" in source
+    assert "window.location.replace('/?takeover=" in source
 
 
 def test_read_only_mode_rejects_motion_without_backend_call(monkeypatch) -> None:
