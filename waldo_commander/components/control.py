@@ -87,6 +87,14 @@ _AXIS_ORDER = (
 _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 
 _ZDT_PARKING_JOINTS_DEG = (-11.96, -148.42, 115.35, -30.11, -69.10, 81.89)
+_ZDT_JOINT_LIMITS_DEG = (
+    (-127.441406, 127.441406),
+    (-151.875, -3.09375),
+    (102.582237, 289.095395),
+    (-112.5, 112.5),
+    (-150.0, 92.8125),
+    (-2.8125, 182.8125),
+)
 
 # SVG icon transform lookup: (vb_width, vb_height) -> default transform
 _ICON_TRANSFORMS: dict[tuple[int, int], str] = {
@@ -999,6 +1007,11 @@ class ControlPanel:
 
     def _get_joint_limits(self, i: int) -> tuple[float, float]:
         """Return (lo, hi) for joint i with safe defaults."""
+        if (
+            ui_state.active_robot.backend_package == "parol6_zdt_backend"
+            and 0 <= i < len(_ZDT_JOINT_LIMITS_DEG)
+        ):
+            return _ZDT_JOINT_LIMITS_DEG[i]
         try:
             pos_deg = ui_state.active_robot.joints.limits.position.deg
             if i < pos_deg.shape[0]:
