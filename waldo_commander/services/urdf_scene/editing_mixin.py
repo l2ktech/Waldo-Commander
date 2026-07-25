@@ -706,13 +706,15 @@ class EditingMixin:
             text = ", ".join(
                 f"J{i + 1}={angle:.2f}°" for i, angle in enumerate(angles)
             )
-            self._end_editing_session()
+            if self._edit_bar_label is not None:
+                self._edit_bar_label.text = "人工姿态已保留（点击红叉恢复实时姿态）"
             dialog = ui.dialog()
             with dialog, ui.card().classes("min-w-[520px]"):
                 ui.label("人工姿态估算结果").classes("text-lg font-medium")
                 ui.label(text).classes("font-mono")
                 ui.label(
-                    "该结果来自人工视觉对齐，不会写入硬件零点，也不能替代输出侧编码器。"
+                    "3D模型将保持当前人工姿态。点击底部红叉后恢复编码器实时姿态；"
+                    "该结果不会写入硬件零点，也不能替代输出侧编码器。"
                 ).classes("text-sm text-gray-400")
                 with ui.row().classes("justify-end w-full"):
                     ui.button(
