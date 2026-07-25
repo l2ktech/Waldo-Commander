@@ -1646,11 +1646,10 @@ def _client_is_browser_navigation(page_client: Client | None) -> bool:
         return True
     headers = page_client.request.headers
     user_agent = headers.get("user-agent", "")
-    return (
-        "Mozilla/" in user_agent
-        and headers.get("sec-fetch-mode", "").lower() == "navigate"
-        and headers.get("sec-fetch-dest", "").lower() == "document"
-    )
+    # Chromium may omit Sec-Fetch-* on a script-opened ``noopener`` popup.
+    # The browser user-agent is sufficient here: command-line probes such as
+    # curl do not send it and therefore still cannot reserve a control slot.
+    return "Mozilla/" in user_agent
 
 
 @ui.page("/")

@@ -540,7 +540,7 @@ def test_takeover_token_is_host_bound_short_lived_and_single_use(monkeypatch) ->
     assert commander_main._consume_takeover_token(token, source) is False
 
 
-def test_only_real_browser_navigation_can_reserve_primary_slot(monkeypatch) -> None:
+def test_only_real_browser_clients_can_reserve_primary_slot(monkeypatch) -> None:
     monkeypatch.delitem(commander_main.sys.modules, "pytest", raising=False)
 
     def page(headers: dict[str, str]):
@@ -562,7 +562,7 @@ def test_only_real_browser_navigation_can_reserve_primary_slot(monkeypatch) -> N
         commander_main._client_is_browser_navigation(
             page({"user-agent": "Mozilla/5.0 Chrome/140.0"})
         )
-        is False
+        is True
     )
 
 
