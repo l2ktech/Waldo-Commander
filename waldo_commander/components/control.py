@@ -86,6 +86,8 @@ _AXIS_ORDER = (
 )
 _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 
+_ZDT_PARKING_JOINTS_DEG = (-11.96, -148.42, 115.35, -30.11, -69.10, 81.89)
+
 # SVG icon transform lookup: (vb_width, vb_height) -> default transform
 _ICON_TRANSFORMS: dict[tuple[int, int], str] = {
     (32, 32): "translate(-2,-2) scale(0.85)",
@@ -2103,6 +2105,55 @@ class ControlPanel:
             logger.error("HOME failed: %s", e)
             ui.notify(operator_error("回零", e), color="negative", timeout=6000)
 
+    async def _execute_parking_move(self) -> None:
+        """Move to the operator-confirmed ZDT parking pose."""
+        if not self._movement_allowed():
+            return
+
+        async def move() -> None:
+            await self.client.move_j(
+                list(_ZDT_PARKING_JOINTS_DEG),
+                speed=_norm_speed(),
+                accel=_norm_accel(),
+                wait=True,
+                timeout=self.EXACT_MOVE_TIMEOUT_S,
+            )
+            ui.notify("机械臂已到达停车位。", color="positive")
+
+        await self._run_incremental_move("joint", move)
+
+    def confirm_parking_move(self) -> None:
+        """Confirm a multi-axis parking move before dispatching it."""
+        if waldoctl.commander.status.editing_mode:
+            ui.notify("请先点击红叉退出姿态对齐模式。", color="warning")
+            return
+        if not self._movement_allowed():
+            return
+
+        dialog = ui.dialog().props("persistent")
+
+        def execute() -> None:
+            dialog.close()
+            _safe_task(self._execute_parking_move())
+
+        with dialog, ui.card().classes("min-w-[500px]"):
+            ui.label("返回停车位？").classes("text-lg font-medium")
+            ui.label(
+                "机械臂将以页面当前速度和加速度执行六轴 MoveJ。运动期间可随时按 STOP 或急停。"
+            ).classes("text-sm text-gray-400")
+            ui.label(
+                ", ".join(
+                    f"J{i + 1}={angle:.2f}°"
+                    for i, angle in enumerate(_ZDT_PARKING_JOINTS_DEG)
+                )
+            ).classes("font-mono text-xs")
+            with ui.row().classes("justify-end w-full"):
+                ui.button("取消", on_click=dialog.close).props("flat")
+                ui.button("返回停车位", icon="garage", on_click=execute).props(
+                    "color=teal-6"
+                )
+        dialog.open()
+
     def _is_urdf_scene_valid(self) -> bool:
         """Check if urdf_scene exists and its client is still valid."""
         if not ui_state.urdf_scene:
@@ -2847,6 +2898,10 @@ class ControlPanel:
             ui.button(icon="home", on_click=self.send_home).props(
                 "dense round unelevated color=teal-6"
             ).tooltip("Home (H)").mark("btn-home")
+
+            ui.button(icon="garage", on_click=self.confirm_parking_move).props(
+                "dense round unelevated color=blue-grey-6"
+            ).tooltip("返回已确认停车位").mark("btn-parking")
 
             robot_btn = (
                 ui.button(

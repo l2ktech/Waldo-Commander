@@ -38,6 +38,37 @@ def test_zdt_speed_rating_spans_the_encodable_range() -> None:
     assert control._normalized_speed(100, "parol6_zdt_backend") == pytest.approx(1.0)
 
 
+@pytest.mark.asyncio
+async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
+    calls: list[tuple[list[float], dict[str, object]]] = []
+
+    class Client:
+        async def move_j(self, angles, **kwargs):
+            calls.append((angles, kwargs))
+            return 1
+
+    panel = object.__new__(control.ControlPanel)
+    panel.client = Client()
+    panel._movement_allowed = lambda: True
+
+    async def run(_label, operation):
+        await operation()
+
+    panel._run_incremental_move = run
+    monkeypatch.setattr(control, "_norm_speed", lambda: 0.5)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 1.0)
+    monkeypatch.setattr(control.ui, "notify", lambda *args, **kwargs: None)
+
+    await panel._execute_parking_move()
+
+    assert calls == [
+        (
+            list(control._ZDT_PARKING_JOINTS_DEG),
+            {"speed": 0.5, "accel": 1.0, "wait": True, "timeout": 120.0},
+        )
+    ]
+
+
 def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
     assert commander_main._urdf_angle_signs("parol6_zdt_backend") == [
         -1,
