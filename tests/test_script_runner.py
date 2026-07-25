@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,6 +50,41 @@ print("Line 3")
     assert "Line 1" in stdout_lines[0]
     assert "Line 2" in stdout_lines[1]
     assert "Line 3" in stdout_lines[2]
+
+
+@pytest.mark.unit
+async def test_run_script_hides_third_party_syntax_warnings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Import-time SyntaxWarning noise must not be shown as a program error."""
+    from waldo_commander.services.script_runner import create_default_config, run_script
+    from waldo_commander.state import ui_state
+
+    monkeypatch.setattr(
+        ui_state,
+        "robot",
+        SimpleNamespace(backend_package="parol6_zdt_backend"),
+    )
+
+    script_path = tmp_path / "syntax_warning.py"
+    script_path.write_text(
+        'import warnings\nwarnings.warn("third-party noise", SyntaxWarning)\n'
+        'print("program-ok")\n'
+    )
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    handle = await run_script(
+        create_default_config(str(script_path)),
+        on_stdout=stdout_lines.append,
+        on_stderr=stderr_lines.append,
+    )
+    return_code = await handle["proc"].wait()
+
+    assert return_code == 0
+    assert stdout_lines == ["program-ok"]
+    assert not any("SyntaxWarning" in line for line in stderr_lines)
 
 
 @pytest.mark.unit

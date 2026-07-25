@@ -1,6 +1,7 @@
 """Tests for settings page functionality."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from nicegui.testing import User
@@ -12,6 +13,19 @@ from tests.helpers.wait import wait_for_app_ready
 
 # Access storage via getattr to satisfy static type checkers (NiceGUI has no typed attr)
 app_storage: Any = getattr(ng_app, "storage")
+
+
+def test_zdt_backend_uses_fixed_socketcan_connection(monkeypatch) -> None:
+    """The deployed ZDT page must not offer obsolete serial/backend choices."""
+    from waldo_commander.components.settings import SettingsContent
+
+    monkeypatch.setattr(
+        ui_state,
+        "robot",
+        SimpleNamespace(backend_package="parol6_zdt_backend"),
+    )
+
+    assert SettingsContent._fixed_zdt_backend() is True
 
 
 @pytest.mark.integration

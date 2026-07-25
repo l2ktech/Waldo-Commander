@@ -13,7 +13,7 @@ import html
 import logging
 import re
 
-from nicegui import Client, ui
+from nicegui import Client, context, ui
 from nicegui.elements.codemirror.codemirror import (
     DecorationSpec,
     Diagnostic,
@@ -283,17 +283,17 @@ class EditorDecorations:
         })();
         """
         try:
-            ui.run_javascript(js_code)
+            client = self._ui_client or context.client
         except (RuntimeError, AssertionError):
-            # No active client context — fall back to the stored page client;
-            # if none, we're likely in a unit test where the JS hook is moot.
-            if self._ui_client:
-                try:
-                    self._ui_client.run_javascript(js_code)
-                except (RuntimeError, AssertionError):
-                    pass
-            else:
-                logger.debug("Cannot flash editor tab: no client available")
+            logger.debug("Cannot flash editor tab: no client available")
+            return
+        if not client.has_socket_connection:
+            logger.debug("Cannot flash editor tab: client is not connected")
+            return
+        try:
+            client.run_javascript(js_code)
+        except (RuntimeError, AssertionError):
+            logger.debug("Cannot flash editor tab: client is unavailable")
 
     def highlight_executing_line(self, step_index: int, tab_id: str) -> None:
         """Highlight the source line on the launching tab for the current step.

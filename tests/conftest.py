@@ -259,6 +259,7 @@ class _StubCaplog:
 def class_screen(
     request: pytest.FixtureRequest,
     class_driver: _webdriver.Chrome,
+    session_controller: "Robot",
 ) -> Generator["Screen", None, None]:
     """Browser session shared across all tests in a class.
 
@@ -280,6 +281,25 @@ def class_screen(
     os.environ["NICEGUI_SCREEN_TEST_PORT"] = str(Screen.PORT)
 
     try:
+        # Class-scoped browser tests skip the per-test controller_reset fixture,
+        # so establish their one shared simulator baseline before opening the
+        # page. Without HOME, path previews are rejected as "Robot not homed".
+        from parol6 import AsyncRobotClient
+
+        async def _prepare_controller() -> None:
+            controller_port, _ = _get_test_ports()
+            async with AsyncRobotClient(
+                host="127.0.0.1",
+                port=controller_port,
+                timeout=5.0,
+            ) as test_client:
+                await test_client.reset_state()
+                await test_client.simulator(True)
+                await test_client.reset()
+                await test_client.home(wait=True, timeout=10.0)
+
+        asyncio.run(_prepare_controller())
+
         # Reset NiceGUI globals at class setup (isolation between classes)
         with nicegui_testing_general.nicegui_reset_globals():
             # Create Screen wrapper with class-scoped driver (stub caplog since we share session)
@@ -527,6 +547,7 @@ def reset_state(request: pytest.FixtureRequest):
     # tests' shutdown hook clears the locator, so unit tests that follow
     # would otherwise hit the "not initialised" RuntimeError.
     _install_test_commander()
+    state_module.ui_state.robot = waldoctl.commander.robot
 
     reset_all_state()
 
@@ -577,7 +598,7 @@ def reset_state(request: pytest.FixtureRequest):
     yield
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def kill_stale_controllers() -> Generator[None, None, None]:
     """Kill any existing controller processes before and after test session.
 
@@ -616,7 +637,7 @@ def kill_stale_controllers() -> Generator[None, None, None]:
             pass
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def session_controller(
     test_env_config: None,
     kill_stale_controllers: None,
@@ -645,7 +666,7 @@ def session_controller(
         robot.stop()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def warmup_jit_cache(silence_noisy_logging: None) -> None:
     """Pre-warm numba JIT cache before controller starts.
 
@@ -658,7 +679,7 @@ def warmup_jit_cache(silence_noisy_logging: None) -> None:
     warmup_jit()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def session_client(
     session_controller: "Robot",
 ) -> Generator["AsyncRobotClient", None, None]:
@@ -700,7 +721,6 @@ def session_client(
 @pytest.fixture(autouse=True)
 async def controller_reset(
     request: pytest.FixtureRequest,
-    session_controller: "Robot",
 ):
     """Per-test fixture that resets the shared controller state.
 
@@ -712,13 +732,23 @@ async def controller_reset(
     """
     from parol6 import AsyncRobotClient
 
+    uses_app = any(
+        name in request.fixturenames for name in ("user", "screen", "class_screen")
+    )
+    if not uses_app:
+        yield
+        return
+
+    # Only app tests need the official simulator controller. Resolve it lazily
+    # so pure unit/contract tests are not blocked by serial-controller startup.
+    request.getfixturevalue("session_controller")
+
     # Skip reset for class_screen tests - they share state across tests in a class
-    # The controller is reset once when the class_screen fixture sets up
+    # The controller is reset once when the class_screen fixture sets up.
     if "class_screen" in request.fixturenames:
         yield
         return
 
-    # Only reset for tests that use NiceGUI app (user or screen fixture)
     if "user" in request.fixturenames or "screen" in request.fixturenames:
         controller_port, _ = _get_test_ports()
         # Create a fresh client on this test's event loop

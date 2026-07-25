@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import secrets
 import signal
 import sys
 import time
@@ -1528,8 +1529,38 @@ async def index_page():
     # Also reclaim if the held id is stale (tab disconnected without firing
     # _on_disconnect, or test fixtures churning clients rapidly).
     held_id = ui_state.active_client_id
-    if held_id is None or held_id not in Client.instances:
+    held_client = Client.instances.get(held_id) if held_id is not None else None
+    presented_token = this_client.request.query_params.get("waldo_tab")
+    token_refresh = (
+        held_client is not None
+        and ui_state.active_page_token is not None
+        and presented_token is not None
+        and secrets.compare_digest(presented_token, ui_state.active_page_token)
+    )
+    logger.debug(
+        "Page ownership: client=%s tab=%s held=%s held_tab=%s referer=%s cache=%s",
+        this_client.id,
+        this_client.tab_id,
+        held_id,
+        held_client.tab_id if held_client is not None else None,
+        this_client.request.headers.get("referer"),
+        this_client.request.headers.get("cache-control"),
+    )
+    same_tab_refresh = (
+        held_client is not None
+        and held_client.tab_id is not None
+        and held_client.tab_id == this_client.tab_id
+    )
+    if token_refresh or same_tab_refresh:
+        # Chrome establishes the replacement page before the old websocket
+        # necessarily emits disconnect. The server-issued page token (or a
+        # stable NiceGUI tab_id once available) identifies a primary refresh.
+        _cleanup_page_resources(held_client)
+        control_lease.release(BROWSER, held_client.id)
         ui_state.active_client_id = this_client.id
+    elif held_id is None or held_client is None:
+        ui_state.active_client_id = this_client.id
+        ui_state.active_page_token = secrets.token_urlsafe(18)
     is_active = ui_state.active_client_id == this_client.id
     if is_active:
         # The active tab is the default controller — claim the lease when it's
@@ -1546,6 +1577,7 @@ async def index_page():
         if ui_state.active_client_id == this_client.id:
             control_lease.release(BROWSER, this_client.id)
             ui_state.active_client_id = None
+            ui_state.active_page_token = None
         # Editor + page-state teardown must only run for the active client.
         # A shadow tab disconnecting must not touch the active tab's
         # listeners, timers, or script-watch tasks — _on_disconnect is
@@ -1575,6 +1607,19 @@ async def index_page():
     apply_theme("dark")
     ui.query(".nicegui-content").classes("p-0")
     inject_layout_css()
+    page_token = ui_state.active_page_token
+    if page_token is not None:
+        ui.run_javascript(
+            f"""
+            (() => {{
+              const url = new URL(window.location.href);
+              if (url.searchParams.get('waldo_tab') !== {page_token!r}) {{
+                url.searchParams.set('waldo_tab', {page_token!r});
+                history.replaceState(history.state, '', url);
+              }}
+            }})()
+            """
+        )
 
     page_state = _PageState(page_client=this_client)
     build_page_content(page_state)

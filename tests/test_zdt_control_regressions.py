@@ -7,6 +7,7 @@ import pytest
 from waldo_commander.components import control
 from waldo_commander import main as commander_main
 from waldo_commander.components.playback import PlaybackController
+from waldo_commander.operator_messages import operator_error
 
 
 def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
@@ -85,7 +86,58 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
 
     await panel._run_incremental_move("cart", operation)
 
-    assert notifications == [("笛卡尔动作失败：IK target is unreachable", "negative")]
+    assert notifications == [
+        (
+            "笛卡尔动作失败：操作未完成，系统已保留诊断信息。"
+            "处理方法：请先确认页面状态正常后重试；"
+            "若再次失败，请查看服务日志或联系维护人员。",
+            "negative",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw_error", "expected_reason", "expected_solution"),
+    [
+        (
+            "CAPABILITY_NOT_AUTHORIZED",
+            "目标超出本次授权的运动范围",
+            "请减小步长或使用分段移动",
+        ),
+        (
+            "terminal target error 0.44 deg exceeds 0.25 deg",
+            "机械臂已停止，但终点误差超过验收范围",
+            "请降低速度或加速度后重试",
+        ),
+        (
+            "Robot mode requires a hardware connection",
+            "机械臂硬件尚未连接",
+            "请确认 worker、can0 和适配器在线",
+        ),
+        (
+            "COMMAND_TIMEOUT",
+            "动作等待超时，系统已执行停止",
+            "请降低速度或步长",
+        ),
+    ],
+)
+def test_operator_errors_are_chinese_and_actionable(
+    raw_error: str,
+    expected_reason: str,
+    expected_solution: str,
+) -> None:
+    message = operator_error("关节动作", raw_error)
+    assert expected_reason in message
+    assert expected_solution in message
+    assert raw_error not in message
+    assert "处理方法：" in message
+
+
+def test_joint_limit_waypoints_never_exceed_receipt_delta() -> None:
+    points = control._joint_limit_waypoints(-132.0, 180.0)
+    assert points == [-42.0, 48.0, 138.0, 180.0]
+    segments = [b - a for a, b in zip([-132.0, *points], points)]
+    assert max(abs(delta) for delta in segments) <= 90.0
 
 
 @pytest.mark.asyncio
@@ -162,7 +214,7 @@ async def test_exact_joint_moves_share_incremental_move_lock(monkeypatch) -> Non
         target: list[float], *, speed: float, accel: float, wait: bool, timeout: float
     ) -> None:
         assert wait is True
-        assert timeout == 30.0
+        assert timeout == panel.EXACT_MOVE_TIMEOUT_S
         assert accel == 0.4
         targets.append(target)
         started.set()
@@ -289,7 +341,11 @@ async def test_cartesian_jog_failure_releases_button_and_notifies(monkeypatch) -
     assert panel._cart_pressed_axes["X+"] is False
     assert timer.active is False
     assert notifications == [
-        ("笛卡尔点动失败：current grant and lease are required", "negative")
+        (
+            "笛卡尔点动失败：页面控制授权已失效。"
+            "处理方法：请等待上一动作结束；仍未恢复时刷新页面并重新接管。",
+            "negative",
+        )
     ]
 
 

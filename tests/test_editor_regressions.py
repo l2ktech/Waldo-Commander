@@ -168,7 +168,7 @@ class TestEditorRegressions:
             cm_content = focus_editor(class_screen)
             cm_content.send_keys(Keys.CONTROL + "s")
 
-            wait_for_notification(class_screen, "Save failed:", timeout=5.0)
+            wait_for_notification(class_screen, "程序保存失败：", timeout=5.0)
         finally:
             active_tab.filename = original_filename
 

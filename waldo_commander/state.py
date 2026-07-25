@@ -173,6 +173,7 @@ class UiState:
     # window between a takeover click and the reloaded client reconnecting.
     # See main.index_page / main.check_ping for the lifecycle.
     active_client_id: str | None = None
+    active_page_token: str | None = None
     urdf_index_mapping: list[int] = field(default_factory=lambda: list(range(6)))
     current_tool_stls: list[Any] = field(default_factory=list)
 
@@ -231,6 +232,7 @@ class UiState:
         """Reset UI state. Does not reset robot (set once at startup)."""
         self.urdf_scene = None
         self.active_client_id = None
+        self.active_page_token = None
         self.plugin_panels = []
         self._started_panel_ids = set()
 
