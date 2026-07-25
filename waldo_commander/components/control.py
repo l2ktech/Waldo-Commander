@@ -1593,6 +1593,11 @@ class ControlPanel:
     async def set_joint_pressed(self, j: int, direction: str, is_pressed: bool) -> None:
         """Hybrid click/hold: quick click => single step, press-and-hold => stream until release."""
         if waldoctl.commander.status.editing_mode:
+            if is_pressed:
+                ui.notify(
+                    "当前处于姿态对齐模式，真实运动已暂停。处理方法：点击红叉退出姿态对齐后再操作。",
+                    color="warning",
+                )
             return
         if not self._movement_allowed(notify=is_pressed):
             return
@@ -1731,6 +1736,11 @@ class ControlPanel:
     async def set_axis_pressed(self, axis: str, is_pressed: bool) -> None:
         """Hybrid click/hold for cartesian axes: click => single step, hold => stream."""
         if waldoctl.commander.status.editing_mode:
+            if is_pressed:
+                ui.notify(
+                    "当前处于姿态对齐模式，真实运动已暂停。处理方法：点击红叉退出姿态对齐后再操作。",
+                    color="warning",
+                )
             return
         if not self._movement_allowed(notify=is_pressed):
             return
@@ -2131,7 +2141,10 @@ class ControlPanel:
                 wait=True,
                 timeout=self.EXACT_MOVE_TIMEOUT_S,
             )
-            ui.notify("机械臂已到达停车位。", color="positive")
+            ui_client = getattr(self, "_ui_client", None)
+            if ui_client is not None:
+                with ui_client:
+                    ui.notify("机械臂已到达停车位。", color="positive")
 
         await self._run_incremental_move("joint", move)
 

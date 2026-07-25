@@ -761,6 +761,44 @@ async def test_cartesian_click_waits_for_safe_terminal_and_forwards_settings(
 
 
 @pytest.mark.asyncio
+async def test_parking_success_notification_uses_page_client_context(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = asyncio.Lock()
+    panel._movement_allowed = lambda **_kwargs: True
+    panel.client = SimpleNamespace()
+    context_active = False
+
+    class PageClient:
+        def __enter__(self):
+            nonlocal context_active
+            context_active = True
+
+        def __exit__(self, *_args):
+            nonlocal context_active
+            context_active = False
+
+    panel._ui_client = PageClient()
+
+    async def move_j(*_args, **_kwargs):
+        return 1
+
+    panel.client.move_j = move_j
+    monkeypatch.setattr(control, "_norm_speed", lambda: 0.1)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 0.1)
+    notifications: list[str] = []
+
+    def notify(message: str, **_kwargs) -> None:
+        assert context_active is True
+        notifications.append(message)
+
+    monkeypatch.setattr(control.ui, "notify", notify)
+
+    await panel._execute_parking_move()
+
+    assert notifications == ["机械臂已到达停车位。"]
+
+
+@pytest.mark.asyncio
 async def test_cartesian_jog_failure_releases_button_and_notifies(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     panel._movement_allowed = lambda **_kwargs: True
