@@ -25,6 +25,19 @@ class TestUrdfSceneRender:
         """
         screen_wait_for_scene_ready(class_screen)
 
+        rect = class_screen.selenium.execute_script(
+            'const div = document.querySelector(".nicegui-scene");'
+            'if (!div) throw new Error("scene element not mounted");'
+            "const r = div.getBoundingClientRect();"
+            "return {top: r.top, bottom: r.bottom, height: r.height, "
+            "viewportHeight: window.innerHeight};"
+        )
+        assert rect["height"] > 0
+        assert rect["top"] < rect["viewportHeight"], (
+            f"3D scene is mounted below the viewport: {rect}"
+        )
+        assert rect["bottom"] > 0
+
         class_screen.selenium.execute_script(
             'const div = document.querySelector(".nicegui-scene");'
             'if (!div) throw new Error("scene element not mounted");'

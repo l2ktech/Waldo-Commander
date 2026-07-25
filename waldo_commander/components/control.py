@@ -44,6 +44,7 @@ from waldo_commander.services.control_lease import (
 )
 from waldo_commander.services.motion_recorder import motion_recorder
 from waldo_commander.services.programs import is_any_program_running
+from waldo_commander.operator_messages import operator_error
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,29 @@ _RE_VIEWBOX = re.compile(r'viewBox="\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*"')
 _RE_SVG_INNER = re.compile(r"<svg[^>]*>([\s\S]*?)</svg>")
 _RE_TEXT_LABEL = re.compile(r"(<text\b[^>]*>)(.*?)(</text>)", re.DOTALL)
 _RE_WHITESPACE = re.compile(r"\s+")
+
+
+def _joint_limit_waypoints(
+    current_deg: float,
+    target_deg: float,
+    *,
+    max_segment_deg: float = 90.0,
+) -> list[float]:
+    """Split a large absolute move into receipt-compatible waypoints."""
+    if max_segment_deg <= 0:
+        raise ValueError("max_segment_deg must be positive")
+    points: list[float] = []
+    current = float(current_deg)
+    target = float(target_deg)
+    while abs(target - current) > 1e-9:
+        remaining = target - current
+        current = (
+            target
+            if abs(remaining) <= max_segment_deg
+            else current + math.copysign(max_segment_deg, remaining)
+        )
+        points.append(current)
+    return points
 
 
 @dataclasses.dataclass
@@ -163,20 +187,15 @@ class _EStopManager:
                 ).classes("w-96")
 
                 if is_physical:
-                    ui.label("Physical E-STOP Active").classes(
+                    ui.label("实体急停已触发").classes(
                         "text-xl font-bold text-negative text-center"
                     )
-                    ui.label("The physical E-STOP button was pressed.").classes(
-                        "text-center"
-                    )
-                    ui.label("To continue, unset the E-STOP button.").classes(
-                        "text-center"
-                    )
+                    ui.label("机械臂已停止。处理方法：释放实体急停按钮后再继续。").classes("text-center")
                 else:
-                    ui.label("Digital E-STOP Active").classes(
+                    ui.label("软件停止已触发").classes(
                         "text-xl font-bold text-warning text-center"
                     )
-                    ui.label("Robot motion has been stopped.").classes("text-center")
+                    ui.label("机械臂已停止。确认现场安全后可执行复位。").classes("text-center")
 
                     async def reset():
                         try:
@@ -186,14 +205,14 @@ class _EStopManager:
                                 self._dialog.close()
                                 self._dialog = None
                         except Exception as e:
-                            message = f"Reset failed: {e}"
+                            message = operator_error("急停复位", e)
                             ui.notify(message, color="negative")
                             logger.warning(
                                 "Reset after digital E-STOP failed: %s", e
                             )
 
                     with ui.row().classes("gap-2 justify-center w-full mt-4"):
-                        ui.button("Reset", on_click=reset).props(
+                        ui.button("复位", on_click=reset).props(
                             "color=positive size=lg"
                         ).mark("btn-estop-resume")
 
@@ -444,7 +463,7 @@ class _ToolQuickActions:
                 await tool.action_l(not waldoctl.commander.status.tool.engaged)
         except Exception as e:
             logger.error("Tool action_l failed: %s", e)
-            ui.notify(f"Action failed: {e}", color="negative")
+            ui.notify(operator_error("工具动作", e), color="negative", timeout=6000)
 
     async def _on_action_r(self) -> None:
         if not self._movement_allowed():
@@ -456,7 +475,7 @@ class _ToolQuickActions:
             await tool.action_r(not waldoctl.commander.status.tool.engaged)
         except Exception as e:
             logger.error("Tool action_r failed: %s", e)
-            ui.notify(f"Action failed: {e}", color="negative")
+            ui.notify(operator_error("工具动作", e), color="negative", timeout=6000)
 
     async def _on_adjust(self, direction: int) -> None:
         if not self._movement_allowed():
@@ -479,7 +498,7 @@ class _ToolQuickActions:
             motion_recorder.record_action("gripper", position=pos, current=new_cur)
         except Exception as e:
             logger.error("Adjust failed: %s", e)
-            ui.notify(f"Adjust failed: {e}", color="negative")
+            ui.notify(operator_error("夹爪调节", e), color="negative", timeout=6000)
 
 
 class _ClickHoldHandler:
@@ -775,9 +794,9 @@ class ControlPanel:
                     display = "关节" if label == "joint" else "笛卡尔"
                     with ui_client:
                         ui.notify(
-                            f"{display}动作失败：{error}",
+                            operator_error(f"{display}动作", error),
                             color="negative",
-                            timeout=4000,
+                            timeout=6000,
                         )
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
@@ -1092,13 +1111,16 @@ class ControlPanel:
         if _read_only_mode():
             if notify:
                 ui.notify(
-                    "Read-only hardware mode: motion controls are disabled",
+                    "当前为只读模式，运动控制已禁用。处理方法：切换到可运动硬件模式。",
                     color="warning",
                 )
             return False
         if is_any_program_running():
             if notify:
-                ui.notify("Script is running — jog disabled", color="warning")
+                ui.notify(
+                    "程序正在运行，点动已禁用。处理方法：先停止程序再操作。",
+                    color="warning",
+                )
             return False
         if not require_browser_control(ui_state.active_client_id, notify=notify):
             return False
@@ -1109,7 +1131,7 @@ class ControlPanel:
             return True
         if notify:
             ui.notify(
-                "Robot mode requires a hardware connection. Connect robot or switch to Simulator mode.",
+                operator_error("运动", "hardware connection unavailable"),
                 color="negative",
                 icon="error",
             )
@@ -1253,7 +1275,7 @@ class ControlPanel:
         except Exception as e:  # noqa: BLE001
             logger.debug("take_control stop failed: %s", e)
         self.refresh_control_indicator()
-        ui.notify("You're in control — robot stopped", color="positive")
+        ui.notify("你已取得控制权，机械臂保持停止。", color="positive")
 
     def refresh_control_indicator(self) -> None:
         """Drive the ambient glow, Take-control button, and pending approvals
@@ -1337,19 +1359,19 @@ class ControlPanel:
         if kind == "action":
             if granted:
                 grant_action(sid)
-                ui.notify("Action approved", color="positive")
+                ui.notify("操作已批准。", color="positive")
             else:
                 deny_action(sid)
-                ui.notify("Action denied", color="warning")
+                ui.notify("操作已拒绝。", color="warning")
         else:  # one-time hardware-consent floor
             if granted:
                 grant_consent(sid)
                 ui.notify(
-                    "Hardware motion allowed for this AI session", color="positive"
+                    "本次 AI 会话已允许硬件运动。", color="positive"
                 )
             else:
                 deny_consent(sid)
-                ui.notify("Hardware motion denied", color="warning")
+                ui.notify("硬件运动已拒绝。", color="warning")
 
     # ---- AI control mode (Inspect / Auto-edits / Autopilot) ----
 
@@ -1359,7 +1381,7 @@ class ControlPanel:
         edits when the new mode auto-applies them. Single funnel for the
         settings toggle, the mode chip, and the keyboard shortcut."""
         set_control_mode(mode)
-        ui.notify(f"AI control mode: {mode.label}", color="info")
+        ui.notify(f"AI 控制模式：{mode.label}", color="info")
         self._set_mode_theme(mode)
         chip = getattr(self, "_mode_chip", None)
         if chip is not None:
@@ -1424,7 +1446,10 @@ class ControlPanel:
                 else self._joint_left_btns.get(j)
             )
             self._set_strong_disabled(target, True)
-            ui.notify("该关节方向当前不可用或已到软限位", color="warning")
+            ui.notify(
+                "该关节方向当前不可用或已到软限位。处理方法：请反向移动或减小步长。",
+                color="warning",
+            )
             return
         assert self._joint_click_hold is not None
 
@@ -1704,7 +1729,11 @@ class ControlPanel:
                         ui_state.cart_jog_timer.active = False
                     self._apply_pressed_style(self._cart_axis_imgs.get(axis), False)
                     logger.error("Cartesian jog failed: %s", error)
-                    ui.notify(f"笛卡尔点动失败：{error}", color="negative")
+                    ui.notify(
+                        operator_error("笛卡尔点动", error),
+                        color="negative",
+                        timeout=6000,
+                    )
             self._cart_cadence.tick(
                 time.time(),
                 self.JOG_TICK_S,
@@ -1840,23 +1869,29 @@ class ControlPanel:
         if waldoctl.commander.status.editing_mode:
             return
 
-        if not self._movement_allowed():
-            return
-
-        try:
+        async def move() -> None:
+            if not self._movement_allowed():
+                return
             angles = list(waldoctl.commander.status.joints.angles.deg)
             lo, hi = self._get_joint_limits(joint_index)
-
-            target = angles[: self._n_joints]
-            target[joint_index] = float(lo if which == "min" else hi)
+            final_target = float(lo if which == "min" else hi)
             spd = _norm_speed()
+            for current in _joint_limit_waypoints(
+                float(angles[joint_index]),
+                final_target,
+            ):
+                target = angles[: self._n_joints]
+                target[joint_index] = current
+                await self.client.move_j(
+                    target,
+                    speed=spd,
+                    accel=_norm_accel(),
+                    wait=True,
+                    timeout=self.EXACT_MOVE_TIMEOUT_S,
+                )
+                angles[joint_index] = current
 
-            await self.client.move_j(target, speed=spd)
-        except Exception as e:
-            logger.error("Go to joint limit failed: %s", e)
-            if self._ui_client is not None:
-                with self._ui_client:
-                    ui.notify(f"Failed joint move: {e}", color="negative")
+        await self._run_incremental_move("joint", move)
 
     # ---- Gizmo control methods ----
 
@@ -1925,6 +1960,7 @@ class ControlPanel:
             motion_recorder.record_action("home")
         except Exception as e:
             logger.error("HOME failed: %s", e)
+            ui.notify(operator_error("回零", e), color="negative", timeout=6000)
 
     def _is_urdf_scene_valid(self) -> bool:
         """Check if urdf_scene exists and its client is still valid."""
@@ -1992,7 +2028,7 @@ class ControlPanel:
                     e,
                 )
         except Exception as ex:
-            ui.notify(f"Simulator toggle failed: {ex}", color="negative")
+            ui.notify(operator_error("仿真模式切换", ex), color="negative", timeout=6000)
             logger.error("Simulator toggle failed: %s", ex)
         finally:
             self.sync_sim_mode_visuals()
@@ -2000,7 +2036,10 @@ class ControlPanel:
     async def on_estop_click(self) -> None:
         """Trigger digital E-STOP (protective stop, latched until Reset)."""
         if waldoctl.commander.status.io.estop == 0:
-            ui.notify("Physical E-STOP is active - release it first", color="warning")
+            ui.notify(
+                "实体急停仍处于触发状态。处理方法：请先释放实体急停按钮。",
+                color="warning",
+            )
             return
 
         await self.client.estop()

@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
-
 
 import numpy as np
 from nicegui import Client, app as ng_app, ui
@@ -67,6 +65,7 @@ from waldo_commander.services.urdf_scene import (
     UrdfSceneConfig,
     ToolPose,
     init_angle_buffers,
+    reset_angle_pipeline,
     update_urdf_angles,
 )
 from waldo_commander.mcp import start_mcp_server, stop_mcp_server
@@ -123,11 +122,12 @@ class _PageState:
     page_client: Client
     connection_notification: ui.notification | None = None
     ping_timer: ui.timer | None = None
+    scene_init_timer: ui.timer | None = None
+    urdf_scene: UrdfScene | None = None
     last_ping_ok: bool = False
 
 
 _page_state: _PageState | None = None
-_pending_takeover_token: str | None = None
 
 # Pre-allocated buffers for numba pipelines (scratch space)
 _rotation_matrix_buffer: np.ndarray = np.zeros((3, 3), dtype=np.float64)
@@ -159,7 +159,7 @@ def _update_connection_notification() -> None:
 
     if needs_warning and ps.connection_notification is None:
         ps.connection_notification = ui.notification(
-            message="Robot mode requires a hardware connection. Connect robot or switch to Simulator mode.",
+            message="机械臂硬件尚未连接。处理方法：请确认 worker、can0 和适配器在线，或切换到仿真模式。",
             type="negative",
             close_button=True,
             timeout=0,
@@ -169,8 +169,36 @@ def _update_connection_notification() -> None:
         ps.connection_notification = None
 
 
-async def initialize_urdf_scene() -> None:
+def _is_active_page(page_state: _PageState) -> bool:
+    """Return whether ``page_state`` still owns the active browser slot."""
+    return (
+        _page_state is page_state
+        and ui_state.active_client_id == page_state.page_client.id
+    )
+
+
+def _activate_page_scene(page_state: _PageState, scene: UrdfScene) -> bool:
+    """Publish a scene only while its originating page is still active."""
+    if not _is_active_page(page_state):
+        return False
+
+    previous = page_state.urdf_scene
+    if previous is not None and previous is not scene:
+        previous.cleanup()
+    page_state.urdf_scene = scene
+
+    # Compatibility alias for page components which are themselves rebuilt
+    # per active page. Scene ownership and status routing remain page-scoped.
+    ui_state.urdf_scene = scene
+    reset_angle_pipeline()
+    return True
+
+
+async def initialize_urdf_scene(page_state: _PageState) -> bool:
     """Initialize the URDF scene with error handling."""
+    if not _is_active_page(page_state):
+        return False
+
     robot = ui_state.active_robot
     urdf_path = Path(robot.urdf_path)
     mesh_dir = Path(robot.mesh_dir)
@@ -214,8 +242,8 @@ async def initialize_urdf_scene() -> None:
         angle_signs=_urdf_angle_signs(robot.backend_package),
     )
 
-    ui_state.urdf_scene = UrdfScene(urdf_path, config=scene_config)
-    ui_state.urdf_scene.show(
+    scene = UrdfScene(urdf_path, config=scene_config)
+    scene.show(
         material=scene_config.material,
         background_color=scene_config.background_color,
     )
@@ -225,38 +253,47 @@ async def initialize_urdf_scene() -> None:
         result = await client.tools()
         if result and result.tool:
             vk = ng_app.storage.general.get(f"tool_variant_{result.tool}")
-            ui_state.urdf_scene.apply_tool_everywhere(result.tool, variant_key=vk)
+            scene.apply_tool_everywhere(result.tool, variant_key=vk)
+    except asyncio.CancelledError:
+        scene.cleanup()
+        raise
     except Exception as e:
         logger.error("Failed to sync TCP tool pose: %s", e)
+
+    # A takeover/disconnect can happen while client.tools() is in flight.
+    # Never let that completed coroutine publish into the replacement page.
+    if not _activate_page_scene(page_state, scene):
+        scene.cleanup()
+        return False
 
     # The status consumer can receive the real hardware angles before the
     # page-scoped URDF scene exists.  Apply that cached truth immediately so
     # the first rendered robot pose is not the URDF's all-zero default while
     # waiting for the next multicast status frame.
-    _sync_scene_to_cached_status()
+    _sync_scene_to_cached_status(scene)
 
-    if ui_state.urdf_scene.scene:
-        scene: ui.scene = ui_state.urdf_scene.scene
-        scene._props["grid"] = (10, 100)
+    if scene.scene:
+        nicegui_scene: ui.scene = scene.scene
+        nicegui_scene._props["grid"] = (10, 100)
         # Fill parent container (absolute canvas).
-        scene.classes(remove="h-[66vh]").style(
+        nicegui_scene.classes(remove="h-[66vh]").style(
             "width: 100%; height: 100%; margin: 0; display: block;"
         )
-        scene.move_camera(**DEFAULT_CAMERA, duration=0.0)
+        nicegui_scene.move_camera(**DEFAULT_CAMERA, duration=0.0)
 
         # World coordinate frame at origin (fixed).
         world_axes_size = 0.30
-        scene.line([0, 0, 0], [world_axes_size, 0, 0]).material(
+        nicegui_scene.line([0, 0, 0], [world_axes_size, 0, 0]).material(
             SceneColors.AXIS_X_HEX
         )  # X
-        scene.line([0, 0, 0], [0, world_axes_size, 0]).material(
+        nicegui_scene.line([0, 0, 0], [0, world_axes_size, 0]).material(
             SceneColors.AXIS_Y_HEX
         )  # Y
-        scene.line([0, 0, 0], [0, 0, world_axes_size]).material(
+        nicegui_scene.line([0, 0, 0], [0, 0, world_axes_size]).material(
             SceneColors.AXIS_Z_HEX
         )  # Z
 
-    ui_state.urdf_joint_names = list(ui_state.urdf_scene.get_joint_names())
+    ui_state.urdf_joint_names = list(scene.get_joint_names())
 
     logger.debug("URDF scene initialized with joints: %s", ui_state.urdf_joint_names)
 
@@ -264,17 +301,17 @@ async def initialize_urdf_scene() -> None:
 
     # Settings page may have built before the scene was ready.
     stored_tool = ng_app.storage.general.get("selected_tool")
-    if stored_tool and stored_tool != "NONE" and ui_state.urdf_scene:
+    if stored_tool and stored_tool != "NONE":
         vk = ng_app.storage.general.get(f"tool_variant_{stored_tool}")
-        ui_state.urdf_scene.apply_tool_everywhere(stored_tool, variant_key=vk)
+        scene.apply_tool_everywhere(stored_tool, variant_key=vk)
     else:
         # Gizmo sync needs fresh FK even without a tool change.
-        ui_state.urdf_scene.invalidate_fk_cache()
+        scene.invalidate_fk_cache()
 
     # Generate the workspace hull with the correct tool offset (after tool applied).
     if not os.environ.get("WALDO_SKIP_ENVELOPE") and not workspace_envelope.is_ready:
         workspace_envelope.generate(
-            tool_offset_z=ui_state.urdf_scene._current_tool_offset_z
+            tool_offset_z=scene._current_tool_offset_z
         )
 
     control_panel.sync_gizmo_to_urdf()
@@ -288,15 +325,13 @@ async def initialize_urdf_scene() -> None:
 
     # Scene wasn't ready earlier, so apply simulator appearance now.
     if waldoctl.commander.status.simulator_active:
-        ui_state.urdf_scene.set_simulator_appearance(True)
+        scene.set_simulator_appearance(True)
+    return True
 
 
-def _sync_scene_to_cached_status() -> None:
+def _sync_scene_to_cached_status(scene: UrdfScene) -> None:
     """Apply the latest backend status to a newly-created URDF scene."""
-    scene = ui_state.urdf_scene
-    if scene is None:
-        return
-    update_urdf_angles(waldoctl.commander.status.joints.angles.deg)
+    update_urdf_angles(waldoctl.commander.status.joints.angles.deg, scene)
     scene.update_from_robot_state()
 
 
@@ -379,9 +414,9 @@ async def check_ping() -> None:
     this_id = ui.context.client.id
     active_id = ui_state.active_client_id
     if active_id is None:
-        # No tab holds the slot — claim it by reloading. The reloaded
-        # client lands fresh in index_page and atomically sets the slot.
-        ui.navigate.reload()
+        # A background tab must never promote itself. The operator's primary
+        # Chrome page will claim the slot naturally when it loads/reloads.
+        _build_takeover_overlay("Primary 5800X Chrome window is not connected")
         return
     if active_id != this_id:
         # Some other tab holds the slot. Make sure we're showing the
@@ -438,7 +473,16 @@ async def check_ping() -> None:
         control_panel.refresh_control_indicator()
 
 
-def update_ui_from_status() -> None:
+def _update_page_scene_from_status(page_state: _PageState) -> None:
+    """Drive only the scene owned by the current active page."""
+    if not _is_active_page(page_state) or page_state.urdf_scene is None:
+        return
+    scene = page_state.urdf_scene
+    update_urdf_angles(waldoctl.commander.status.joints.angles.deg, scene)
+    scene.update_from_robot_state()
+
+
+def update_ui_from_status(page_state: _PageState | None = None) -> None:
     """Update UI elements from robot_state (called from multicast consumer)"""
     # Editing sync handles position/angle updates in editing mode.
     skip_position_updates = waldoctl.commander.status.editing_mode
@@ -449,9 +493,9 @@ def update_ui_from_status() -> None:
 
     if not skip_scene_updates:
         with global_phase_timer.phase("scene"):
-            update_urdf_angles(waldoctl.commander.status.joints.angles.deg)
-            if ui_state.urdf_scene:
-                ui_state.urdf_scene.update_from_robot_state()
+            target_page = page_state if page_state is not None else _page_state
+            if target_page is not None:
+                _update_page_scene_from_status(target_page)
 
     if not skip_position_updates:
         # robot_state.pose is already numpy float64; pass directly to numba.
@@ -891,7 +935,7 @@ def _setup_panel_persistence(refs: dict) -> None:
     ui.timer(0.5, lambda: asyncio.create_task(restore_active_tabs()), once=True)
 
 
-def build_page_content() -> None:
+def build_page_content(page_state: _PageState) -> Any:
     """Build the Move page UI."""
 
     # Lottie player for E-STOP dialog animations; load early in HEAD.
@@ -910,6 +954,8 @@ def build_page_content() -> None:
                         readiness_state.app_ready.wait(), timeout=20.0
                     )
                 except asyncio.TimeoutError:
+                    if not _is_active_page(page_state):
+                        return
                     loading_spinner.set_visibility(False)
                     loading_status.text = (
                         "Could not connect to controller. "
@@ -921,7 +967,10 @@ def build_page_content() -> None:
                     )
                     return
 
-                await initialize_urdf_scene()
+                if not _is_active_page(page_state):
+                    return
+                if not await initialize_urdf_scene(page_state):
+                    return
 
                 # By now the serial transport has had time to receive
                 # frames.  If hardware is detected, switch to robot mode.
@@ -930,6 +979,8 @@ def build_page_content() -> None:
                     hw_now = bool(result.hardware_connected) if result else False
                 except Exception:
                     hw_now = False
+                if not _is_active_page(page_state):
+                    return
                 if hw_now and waldoctl.commander.status.simulator_active:
                     logger.info("Hardware detected — switching to robot mode")
                     waldoctl.commander.status.simulator_active = False
@@ -955,9 +1006,14 @@ def build_page_content() -> None:
 
                 scene_loading_overlay.classes("opacity-0 pointer-events-none")
                 await asyncio.sleep(0.4)
-                scene_loading_overlay.delete()
+                if _is_active_page(page_state):
+                    scene_loading_overlay.delete()
 
-            ui.timer(0.05, _init, once=True)
+            # Keep the timer in the scene container's slot. NiceGUI uses the
+            # timer's parent slot as the callback context, so creating this
+            # timer later at page root would mount the 3D canvas below the
+            # full-height application instead of inside the viewport.
+            page_state.scene_init_timer = ui.timer(0.05, _init, once=True)
 
         # Loading overlay — matches scene background, visible until backend is ready
         is_dark = is_dark_theme()
@@ -997,6 +1053,7 @@ def build_page_content() -> None:
     from waldo_commander.services.keybindings import setup_keybindings
 
     setup_keybindings(help_menu)
+    return None
 
 
 # Guard against duplicate startup/shutdown handler registration during tests:
@@ -1243,8 +1300,11 @@ def _register_handlers() -> None:
             ui_state._joint_jog_timer.cancel()
         if ui_state._cart_jog_timer is not None:
             ui_state._cart_jog_timer.cancel()
-        if _page_state is not None and _page_state.ping_timer is not None:
-            _page_state.ping_timer.cancel()
+        if _page_state is not None:
+            if _page_state.ping_timer is not None:
+                _page_state.ping_timer.cancel()
+            if _page_state.scene_init_timer is not None:
+                _cancel_page_timer(_page_state.scene_init_timer)
 
         if control_panel is not None:
             control_panel.cleanup()
@@ -1365,6 +1425,9 @@ def _cleanup_page_resources(page_client: Client) -> None:
 
     if page_state.ping_timer is not None:
         _cancel_page_timer(page_state.ping_timer)
+    if page_state.scene_init_timer is not None:
+        _cancel_page_timer(page_state.scene_init_timer)
+        page_state.scene_init_timer = None
     if ui_state._joint_jog_timer is not None:
         _cancel_page_timer(ui_state._joint_jog_timer)
         ui_state._joint_jog_timer = None
@@ -1379,14 +1442,22 @@ def _cleanup_page_resources(page_client: Client) -> None:
     if editor_panel is not None:
         editor_panel.cleanup()
 
+    if page_state.urdf_scene is not None:
+        scene = page_state.urdf_scene
+        page_state.urdf_scene = None
+        scene.cleanup()
+        if ui_state.urdf_scene is scene:
+            ui_state.urdf_scene = None
+        reset_angle_pipeline()
+
     _page_state = None
 
 
 def _build_takeover_overlay(message: str) -> None:
-    """Render the takeover overlay: scrim + glass card + wandering sad robot.
+    """Render the locked-session overlay: scrim + glass card + sad robot.
 
-    Used as the entire page body for fresh shadow tabs, and as a top-layer
-    overlay for previously-active tabs that have been evicted by another tab.
+    Used as the entire page body for non-primary tabs and as a top-layer
+    overlay for a previously-active tab whose primary session was replaced.
     All visual styling lives in theme.py under the `Takeover Overlay` section;
     this function only assigns class names.
 
@@ -1419,20 +1490,9 @@ def _build_takeover_overlay(message: str) -> None:
         with ui.column().classes("overlay-card items-center max-w-sm p-8"):
             ui.label("Waldo Commander").classes("text-xl font-semibold")
             ui.label(message).classes("text-sm text-center opacity-90")
-
-            def _take_over() -> None:
-                global _pending_takeover_token
-
-                # Carry a one-shot claim through the reload. Keeping the old
-                # owner in place until the claimant arrives prevents every
-                # shadow tab's heartbeat from racing for an empty slot.
-                token = uuid4().hex
-                _pending_takeover_token = token
-                ui.navigate.to(f"/?takeover={token}")
-
-            ui.button("Take over", on_click=_take_over).props(
-                "color=primary unelevated rounded"
-            ).classes("mt-2")
+            ui.label(
+                "Only the primary Chrome window on this 5800X can control the robot."
+            ).classes("text-xs text-center opacity-70")
 
     # Bootstrap face animations + wandering. The robot-faces.js script tag
     # uses `defer`, so the functions may not be defined yet when this JS
@@ -1456,32 +1516,19 @@ def _build_takeover_overlay(message: str) -> None:
 
 
 @ui.page("/")
-async def index_page(takeover: str | None = None):
-    global _page_state, _pending_takeover_token
+async def index_page():
+    global _page_state
     this_client = ui.context.client
     # Don't set _page_state yet — wait until panels are built so the
     # status consumer never touches stale panel references from a
     # previous (deleted) client.
 
-    # Atomic claim of the multi-tab "active" slot. The CPython GIL makes
-    # this race-safe enough for the rare case where two reloaded clients
-    # connect simultaneously: only one branch will see an empty slot.
-    # Also reclaim if the held id is stale (tab disconnected without
-    # firing _on_disconnect, or test fixtures churning clients rapidly).
+    # The first live page owns the fixed primary slot. Other tabs cannot
+    # replace it; they remain locked until the primary Chrome page reconnects.
+    # Also reclaim if the held id is stale (tab disconnected without firing
+    # _on_disconnect, or test fixtures churning clients rapidly).
     held_id = ui_state.active_client_id
-    is_takeover = (
-        takeover is not None
-        and _pending_takeover_token is not None
-        and takeover == _pending_takeover_token
-    )
-    if is_takeover:
-        if held_id is not None:
-            control_lease.release(BROWSER, held_id)
-        if _page_state is not None:
-            _cleanup_page_resources(_page_state.page_client)
-        ui_state.active_client_id = this_client.id
-        _pending_takeover_token = None
-    elif held_id is None or held_id not in Client.instances:
+    if held_id is None or held_id not in Client.instances:
         ui_state.active_client_id = this_client.id
     is_active = ui_state.active_client_id == this_client.id
     if is_active:
@@ -1511,14 +1558,13 @@ async def index_page(takeover: str | None = None):
     if not is_active:
         # Shadow tab: render the takeover overlay only. Do NOT call
         # build_page_content / initialize_urdf_scene — those would mutate
-        # the singletons that the active tab depends on. Install the
-        # 1 Hz check_ping watchdog so the tab can auto-promote when the
-        # active tab eventually closes.
+        # the singletons that the active tab depends on. Its watchdog only
+        # keeps the locked state current; it never promotes the background tab.
         # Theme + layout CSS must be applied here too so the .takeover-*
         # classes (defined in theme.py) actually exist on shadow pages.
         apply_theme("dark")
         inject_layout_css()
-        _build_takeover_overlay("Session active in another tab")
+        _build_takeover_overlay("Locked to the primary 5800X Chrome window")
         this_client._waldo_shadow_ping_timer = ui.timer(  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
             interval=1.0,
             callback=check_ping,
@@ -1530,7 +1576,9 @@ async def index_page(takeover: str | None = None):
     ui.query(".nicegui-content").classes("p-0")
     inject_layout_css()
 
-    build_page_content()
+    page_state = _PageState(page_client=this_client)
+    build_page_content(page_state)
+    _page_state = page_state
 
     # Plugin panels: kick off their long-running tasks now that UI is ready.
     asyncio.create_task(_start_plugin_panels())
@@ -1545,6 +1593,8 @@ async def index_page(takeover: str | None = None):
             waldoctl.commander.status.connected = True
     except Exception as e:
         logger.warning("Connectivity check failed: %s", e)
+    if not _is_active_page(page_state):
+        return
 
     # Wire jog timers to ui_state so the control panel can access them.
     ui_state.joint_jog_timer = ui.timer(
@@ -1563,11 +1613,9 @@ async def index_page(takeover: str | None = None):
 
     # All panels built — now allow the status consumer to update UI.
     # Page-scoped connectivity check (1 Hz) is stored in the state too.
-    _page_state = _PageState(
-        page_client=this_client,
-        ping_timer=ui.timer(interval=1.0, callback=check_ping, active=True),
+    page_state.ping_timer = ui.timer(
+        interval=1.0, callback=check_ping, active=True
     )
-
     # Mark page as ready for tests
     async def _mark_page_done():
         await asyncio.sleep(0)  # Yield to event loop to ensure timers are wired
@@ -1735,7 +1783,7 @@ async def _status_consumer() -> None:
                     pc = ps.page_client if ps is not None else None
                     if pc is not None and not pc._deleted and pc.id in Client.instances:
                         with pc:
-                            update_ui_from_status()
+                            update_ui_from_status(ps)
 
                             readout_panel.update_conn_io()
                             action_log_service.process_status(

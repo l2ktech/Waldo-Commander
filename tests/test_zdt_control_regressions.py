@@ -357,27 +357,45 @@ def test_page_cleanup_cancels_timers_before_client_is_replaced(monkeypatch) -> N
 
     page_client = object()
     ping_timer = Timer()
+    scene_init_timer = Timer()
     joint_timer = Timer()
     cart_timer = Timer()
     control_panel = Panel()
     editor_panel = Panel()
     gripper_panel = Panel()
 
+    class Scene:
+        def __init__(self) -> None:
+            self.cleaned = False
+
+        def cleanup(self) -> None:
+            self.cleaned = True
+
+    scene = Scene()
+
     monkeypatch.setattr(
         main,
         "_page_state",
-        SimpleNamespace(page_client=page_client, ping_timer=ping_timer),
+        SimpleNamespace(
+            page_client=page_client,
+            ping_timer=ping_timer,
+            scene_init_timer=scene_init_timer,
+            urdf_scene=scene,
+        ),
     )
     monkeypatch.setattr(main, "control_panel", control_panel)
     monkeypatch.setattr(main, "editor_panel", editor_panel)
     monkeypatch.setattr(main.ui_state, "_joint_jog_timer", joint_timer)
     monkeypatch.setattr(main.ui_state, "_cart_jog_timer", cart_timer)
     monkeypatch.setattr(main.ui_state, "gripper_page", gripper_panel)
+    monkeypatch.setattr(main.ui_state, "urdf_scene", scene)
 
     main._cleanup_page_resources(page_client)
 
     assert ping_timer.cancelled is True
     assert ping_timer.with_current_invocation is True
+    assert scene_init_timer.cancelled is True
+    assert scene_init_timer.with_current_invocation is True
     assert joint_timer.cancelled is True
     assert joint_timer.with_current_invocation is True
     assert cart_timer.cancelled is True
@@ -385,6 +403,8 @@ def test_page_cleanup_cancels_timers_before_client_is_replaced(monkeypatch) -> N
     assert control_panel.cleaned is True
     assert editor_panel.cleaned is True
     assert gripper_panel.cleaned is True
+    assert scene.cleaned is True
+    assert main.ui_state.urdf_scene is None
     assert main._page_state is None
 
 

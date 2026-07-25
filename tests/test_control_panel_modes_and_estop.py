@@ -37,7 +37,7 @@ async def test_home_command_behavior(
     await asyncio.sleep(0)
 
     # Should see an error notification
-    await user.should_see("Robot mode requires a hardware connection")
+    await user.should_see("机械臂硬件尚未连接")
     # And we should not see the success message
     assert not any("Sent HOME" in m for m in user.notify.messages)
 
@@ -66,8 +66,8 @@ async def test_digital_estop_dialog_behavior(user: User) -> None:
     await asyncio.sleep(0.1)
 
     # Dialog should appear with correct content
-    await user.should_see("Digital E-STOP Active")
-    await user.should_see("Robot motion has been stopped.")
+    await user.should_see("软件停止已触发")
+    await user.should_see("机械臂已停止")
 
     # Resume button should be present (marked for testability)
     resume_btn = user.find(marker="btn-estop-resume")
@@ -96,12 +96,13 @@ async def test_digital_estop_reset_failure_is_visible(
 
     monkeypatch.setattr(ui_state.control_panel.client, "reset", fail_reset)
     user.find(marker="btn-estop").click()
-    await user.should_see("Digital E-STOP Active")
+    await user.should_see("软件停止已触发")
 
     user.find(marker="btn-estop-resume").click()
 
-    await user.should_see("Reset failed: fault reset unavailable")
-    await user.should_see("Digital E-STOP Active")
+    await user.should_see("急停复位失败")
+    await user.should_see("处理方法")
+    await user.should_see("软件停止已触发")
 
 
 @pytest.mark.unit

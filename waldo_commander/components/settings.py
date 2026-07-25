@@ -18,6 +18,7 @@ from waldo_commander.services.camera_service import (
     enumerate_video_devices,
 )
 from waldo_commander.state import simulation_state, ui_state
+from waldo_commander.operator_messages import operator_error
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,17 @@ class SettingsContent:
             "theme_mode": ng_app.storage.general.get("theme_mode", "system"),
             "motion_profile": stored_profile,
         }
+
+    @staticmethod
+    def _fixed_zdt_backend() -> bool:
+        return ui_state.active_robot.backend_package == "parol6_zdt_backend"
+
+    def _build_fixed_connection(self) -> None:
+        with _setting_row(
+            "硬件连接",
+            "由系统服务固定管理，页面无需选择串口或驱动",
+        ):
+            ui.label("SocketCAN · can0").classes("text-sm font-medium")
 
     def _refresh_serial_ports(self) -> None:
         """Refresh the available serial ports in the dropdown."""
@@ -269,10 +281,10 @@ class SettingsContent:
                 await self.client.connect_hardware(port_val)
             except Exception as exc:
                 logger.warning("connect_hardware(%s) failed: %s", port_val, exc)
-                ui.notify(f"Port change failed: {exc}", color="negative")
+                ui.notify(operator_error("串口切换", exc), color="negative", timeout=6000)
                 return
             ng_app.storage.general["com_port"] = port_val
-            ui.notify(f"SET_PORT {port_val}", color="primary")
+            ui.notify(f"串口已切换：{port_val}", color="primary")
 
         port_select_ref.on("update:model-value", lambda e: _apply_port())
         self._refresh_timer = ui.timer(10.0, self._refresh_serial_ports)
@@ -317,7 +329,7 @@ class SettingsContent:
                     await self.client.select_tool(tool, variant_key=vk or "")
                 except Exception as exc:
                     logger.warning("select_tool(%s) failed: %s", tool, exc)
-                    ui.notify(f"Tool change failed: {exc}", color="negative")
+                    ui.notify(operator_error("工具切换", exc), color="negative", timeout=6000)
                     return
 
             ng_app.storage.general["selected_tool"] = tool
@@ -466,7 +478,7 @@ class SettingsContent:
                 await self.client.select_profile(profile)
             except Exception as exc:
                 logger.warning("select_profile(%s) failed: %s", profile, exc)
-                ui.notify(f"Profile change failed: {exc}", color="negative")
+                ui.notify(operator_error("运动配置切换", exc), color="negative", timeout=6000)
                 return
             ng_app.storage.general["motion_profile"] = profile
 
@@ -513,7 +525,7 @@ class SettingsContent:
             new = e.value
             plugins.backend = new
             ng_app.storage.general["plugins/backend"] = new
-            ui.notify("Backend change applies on next launch", color="info")
+            ui.notify("后端将在下次启动时生效。", color="info")
 
         with _setting_row("Backend", "Robot driver (applied on next launch)"):
             ui.select(
@@ -571,7 +583,7 @@ class SettingsContent:
                     current.append(panel_id)
                 plugins.disabled_panels = current
                 ng_app.storage.general["plugins/disabled_panels"] = current
-                ui.notify("Restart to apply", color="info")
+                ui.notify("重启服务后生效。", color="info")
 
             return _handler
 
@@ -628,7 +640,7 @@ class SettingsContent:
                 return
             mcp.enabled = val
             ng_app.storage.general["mcp/enabled"] = val
-            ui.notify("Restart to apply", color="info")
+            ui.notify("重启服务后生效。", color="info")
 
         def _on_host_change(e):
             host = (e.args or "").strip() or "127.0.0.1"
@@ -636,7 +648,7 @@ class SettingsContent:
                 return
             mcp.host = host
             ng_app.storage.general["mcp/host"] = host
-            ui.notify("Restart to apply", color="info")
+            ui.notify("重启服务后生效。", color="info")
 
         def _on_port_change(e):
             try:
@@ -647,7 +659,7 @@ class SettingsContent:
                 return
             mcp.port = port
             ng_app.storage.general["mcp/port"] = port
-            ui.notify("Restart to apply", color="info")
+            ui.notify("重启服务后生效。", color="info")
 
         with _setting_row(
             "MCP server", "Expose commander.* to an MCP client (restart to apply)"
@@ -701,8 +713,13 @@ class SettingsContent:
         """
         prefs = self._load_preferences()
 
+        connection_section = (
+            self._build_fixed_connection
+            if self._fixed_zdt_backend()
+            else lambda: self._build_serial_port(prefs)
+        )
         sections = [
-            lambda: self._build_serial_port(prefs),
+            connection_section,
             lambda: self._build_show_route(prefs),
             lambda: self._build_envelope(prefs),
             self._build_tool_section,
@@ -710,7 +727,7 @@ class SettingsContent:
             lambda: self._build_motion_profile(prefs),
             lambda: self._build_theme(prefs),
             self._build_reference_frames,
-            self._build_backend_selector,
+            *([] if self._fixed_zdt_backend() else [self._build_backend_selector]),
             self._build_plugin_panels,
             *([ai_control_section] if ai_control_section else []),
             self._build_mcp_server,

@@ -38,6 +38,7 @@ import waldoctl
 from waldoctl import LogEntry
 
 from waldo_commander.state import playback_coordination, simulation_state, ui_state
+from waldo_commander.operator_messages import operator_error
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,7 @@ class ScriptExecutionController:
     async def start(self) -> None:
         """Start the current editor content as a Python subprocess."""
         if is_any_program_running():
-            ui.notify("Script already running", color="warning")
+            ui.notify("程序已在运行。处理方法：先停止当前程序再启动新的程序。", color="warning")
             return
 
         try:
@@ -221,11 +222,11 @@ class ScriptExecutionController:
                 self._monitor_script_completion(handle, filename, ui_client)
             )
 
-            ui.notify(f"Started script: {filename}", color="positive")
+            ui.notify(f"程序已启动：{filename}", color="positive")
             logger.info("Started script: %s", filename)
 
         except Exception as e:
-            ui.notify(f"Failed to start script: {e}", color="negative")
+            ui.notify(operator_error("程序启动", e), color="negative", timeout=6000)
             logger.error("Failed to start script: %s", e)
             # Reap the subprocess if run_script succeeded before the exception
             # — otherwise the process group outlives the failed start.
@@ -243,7 +244,7 @@ class ScriptExecutionController:
     async def stop(self) -> None:
         """Stop the running script process."""
         if not is_any_program_running() or not self.script_handle:
-            ui.notify("No script running", color="warning")
+            ui.notify("当前没有正在运行的程序，无需停止。", color="info")
             return
 
         try:
@@ -257,10 +258,10 @@ class ScriptExecutionController:
             self.cleanup_stepping()
             if handle:
                 await stop_script(handle)
-            ui.notify("Script stopped", color="warning")
+            ui.notify("程序已停止。", color="warning")
             logger.info("Script stopped by user")
         except Exception as e:
-            ui.notify(f"Error stopping script: {e}", color="negative")
+            ui.notify(operator_error("程序停止", e), color="negative", timeout=6000)
             logger.error("Error stopping script: %s", e)
 
     # ---- Public step-controller actions (called from playback UI handlers) ----

@@ -250,7 +250,7 @@ def require_browser_control(client_id: str | None, *, notify: bool = True) -> bo
     if seized_from_mcp and notify:
         from nicegui import ui
 
-        ui.notify("You've taken control from the AI", color="positive")
+        ui.notify("你已从 AI 取得控制权。", color="positive")
     return True
 
 

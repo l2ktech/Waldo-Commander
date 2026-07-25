@@ -3,6 +3,7 @@ from functools import partial
 
 import waldoctl
 from nicegui import ui
+from waldo_commander.operator_messages import operator_error
 from waldoctl import RobotClient
 
 from waldo_commander.services.control_lease import require_browser_control
@@ -41,7 +42,7 @@ class IoPage:
             logger.info("OUTPUT%s -> %s", index + 1, "HIGH" if state else "LOW")
         except Exception as e:
             logger.error("Set output failed: %s", e)
-            ui.notify(f"Set output failed: {e}", color="negative")
+            ui.notify(operator_error("数字输出设置", e), color="negative", timeout=6000)
 
     def build(self) -> None:
         """Build the I/O page content dynamically from robot IO pin counts."""

@@ -24,6 +24,7 @@ from waldo_commander.components.log_panel import log_panel
 from waldo_commander.components.playback import playback
 from waldo_commander.services.path_visualizer import UNCHANGED, path_visualizer
 from waldo_commander.services.programs import is_any_program_running
+from waldo_commander.operator_messages import operator_error
 from waldo_commander.state import (
     playback_coordination,
     simulation_state,
@@ -224,7 +225,7 @@ class SimulationEngine:
                 logger.debug("DEBOUNCE: Simulation cancelled by newer edit")
             except Exception as e:
                 logger.error("Auto-simulation failed: %s", e, exc_info=True)
-                ui.notify(f"Simulation error: {e}", color="negative", timeout=3000)
+                ui.notify(operator_error("轨迹仿真", e), color="negative", timeout=6000)
             finally:
                 if self._simulation_debounce_timer is my_timer:
                     self._simulation_debounce_timer = None

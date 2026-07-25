@@ -12,6 +12,7 @@ import waldoctl
 from waldoctl import Program
 
 from waldo_commander.components.simulation_engine import simulation
+from waldo_commander.operator_messages import operator_error
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class FileOperationsMixin:
                 if tab:
                     name = tab.filename
             if not name:
-                ui.notify("No filename specified", color="warning")
+                ui.notify("未指定文件名。处理方法：请输入文件名后再打开。", color="warning")
                 return
 
             file_path = str(self.PROGRAM_DIR / name)
@@ -70,14 +71,14 @@ class FileOperationsMixin:
             simulation.schedule_debounced_simulation(tab_id=program.id)
             logger.info("Loaded program %s", name)
         except Exception as e:
-            ui.notify(f"Load failed: {e}", color="negative")
+            ui.notify(operator_error("程序加载", e), color="negative", timeout=6000)
             logger.error("Load failed: %s", e)
 
     async def save_program(self) -> None:
         """Save the active tab's program to a file."""
         tab = waldoctl.commander.programs.active
         if not tab:
-            ui.notify("No active tab to save", color="warning")
+            ui.notify("当前没有可保存的标签页。处理方法：先新建或打开程序。", color="warning")
             return
         await self._save_tab(tab)
 
@@ -85,7 +86,7 @@ class FileOperationsMixin:
         """Download the active tab's program content to the user's device."""
         tab = waldoctl.commander.programs.active
         if not tab:
-            ui.notify("No active tab to download", color="warning")
+            ui.notify("当前没有可下载的标签页。处理方法：先新建或打开程序。", color="warning")
             return
         self._download_tab(tab)
 
@@ -101,7 +102,7 @@ class FileOperationsMixin:
             self._update_dirty_dot(tab)
             logger.info("Saved program %s", name)
         except Exception as e:
-            ui.notify(f"Save failed: {e}", color="negative")
+            ui.notify(operator_error("程序保存", e), color="negative", timeout=6000)
             logger.error("Save failed: %s", e)
 
     async def _save_tab_and_close(self, tab: Program, dlg: ui.dialog) -> None:
@@ -114,7 +115,7 @@ class FileOperationsMixin:
         """Download tab content to user's device."""
         content = tab.source
         if not content:
-            ui.notify("No content to download", color="warning")
+            ui.notify("程序内容为空，无需下载。处理方法：输入程序内容后再下载。", color="warning")
             return
         filename = tab.filename.strip() or "program.py"
         ui.download(content.encode("utf-8"), filename)
@@ -281,7 +282,7 @@ class FileOperationsMixin:
 
                     dlg.close()
                 except Exception as ex:
-                    ui.notify(f"Upload failed: {ex}", color="negative")
+                    ui.notify(operator_error("程序上传", ex), color="negative", timeout=6000)
                     logger.error("File upload failed: %s", ex)
 
             ui.upload(

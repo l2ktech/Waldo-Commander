@@ -93,6 +93,13 @@ async def run_script(
         if ui_state.active_robot.backend_package == "parol6_zdt_backend"
         else ui_state.active_robot.backend_package
     )
+    # Third-party packages currently emit invalid-docstring SyntaxWarning lines
+    # during import. They are not program failures and must not appear as [ERR].
+    existing_warnings = env.get("PYTHONWARNINGS", "")
+    syntax_filter = "ignore::SyntaxWarning"
+    env["PYTHONWARNINGS"] = (
+        f"{syntax_filter},{existing_warnings}" if existing_warnings else syntax_filter
+    )
 
     if session_id:
         # Bootstrap script injects the stepping wrapper around the user script.

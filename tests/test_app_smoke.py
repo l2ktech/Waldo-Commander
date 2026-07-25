@@ -11,11 +11,10 @@ def test_new_scene_applies_cached_backend_angles(monkeypatch) -> None:
     """A new URDF scene must not render one frame at the zero-angle pose."""
     import waldoctl
     import waldo_commander.main as subject
-    from waldo_commander.state import ui_state
 
     expected = np.array([8.3, -132.8, 109.7, -24.0, -63.3, 76.1])
     waldoctl.commander.status.joints.angles.set_deg(expected)
-    applied: list[np.ndarray] = []
+    applied: list[tuple[object, np.ndarray]] = []
 
     class Scene:
         def __init__(self) -> None:
@@ -25,18 +24,79 @@ def test_new_scene_applies_cached_backend_angles(monkeypatch) -> None:
             self.updated = True
 
     scene = Scene()
-    monkeypatch.setattr(ui_state, "urdf_scene", scene)
     monkeypatch.setattr(
         subject,
         "update_urdf_angles",
-        lambda angles: applied.append(np.array(angles, copy=True)),
+        lambda angles, target_scene: applied.append(
+            (target_scene, np.array(angles, copy=True))
+        ),
     )
 
-    subject._sync_scene_to_cached_status()
+    subject._sync_scene_to_cached_status(scene)
 
     assert len(applied) == 1
-    np.testing.assert_allclose(applied[0], expected)
+    assert applied[0][0] is scene
+    np.testing.assert_allclose(applied[0][1], expected)
     assert scene.updated is True
+
+
+def test_two_takeovers_route_real_angles_only_to_current_page(monkeypatch) -> None:
+    """A late scene from either evicted page must never replace the active scene."""
+    import waldo_commander.main as subject
+    from waldo_commander.state import ui_state
+
+    class PageClient:
+        def __init__(self, client_id: str) -> None:
+            self.id = client_id
+
+    class Scene:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.robot_state_updates = 0
+
+        def update_from_robot_state(self) -> None:
+            self.robot_state_updates += 1
+
+    reset_calls: list[None] = []
+    angle_targets: list[Scene] = []
+    monkeypatch.setattr(
+        subject, "reset_angle_pipeline", lambda: reset_calls.append(None)
+    )
+    monkeypatch.setattr(
+        subject,
+        "update_urdf_angles",
+        lambda _angles, target_scene: angle_targets.append(target_scene),
+    )
+
+    first = subject._PageState(page_client=PageClient("first"))
+    second = subject._PageState(page_client=PageClient("second"))
+    current = subject._PageState(page_client=PageClient("current"))
+    first_scene = Scene("first")
+    second_scene = Scene("second")
+    current_scene = Scene("current")
+    late_first_scene = Scene("late-first")
+    late_second_scene = Scene("late-second")
+
+    for page, scene in (
+        (first, first_scene),
+        (second, second_scene),
+        (current, current_scene),
+    ):
+        monkeypatch.setattr(subject, "_page_state", page)
+        monkeypatch.setattr(ui_state, "active_client_id", page.page_client.id)
+        assert subject._activate_page_scene(page, scene) is True
+
+    assert subject._activate_page_scene(first, late_first_scene) is False
+    assert subject._activate_page_scene(second, late_second_scene) is False
+
+    subject._update_page_scene_from_status(current)
+
+    assert ui_state.urdf_scene is current_scene
+    assert angle_targets == [current_scene]
+    assert current_scene.robot_state_updates == 1
+    assert first_scene.robot_state_updates == 0
+    assert second_scene.robot_state_updates == 0
+    assert len(reset_calls) == 3
 
 
 def test_read_only_mode_rejects_motion_without_backend_call(monkeypatch) -> None:

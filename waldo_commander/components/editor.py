@@ -38,6 +38,7 @@ from waldo_commander.components.simulation_engine import (
     simulation,
 )
 from waldo_commander.components.script_execution import script_exec
+from waldo_commander.operator_messages import operator_error
 from waldo_commander.components.playback import playback
 from waldo_commander.components.file_operations import FileOperationsMixin
 
@@ -483,7 +484,7 @@ class EditorPanel(FileOperationsMixin):
         block a tab switch or file open. Shared with file_operations.load_program
         so the open() path is guarded before it mutates active_id."""
         if is_any_program_recording():
-            ui.notify("Cannot switch tabs while recording", color="warning")
+            ui.notify("录制期间不能切换标签页。处理方法：先停止录制。", color="warning")
             return True
         # The running script's play state lives on the launching program, which
         # may differ from the active tab (switching is allowed while paused), so
@@ -496,7 +497,7 @@ class EditorPanel(FileOperationsMixin):
         if is_any_program_running() and (
             lock_prog is not None and lock_prog.dry_run.playback.is_playing
         ):
-            ui.notify("Cannot switch tabs during script playback", color="warning")
+            ui.notify("程序运行期间不能切换标签页。处理方法：先停止程序。", color="warning")
             return True
         return False
 
@@ -817,10 +818,10 @@ class EditorPanel(FileOperationsMixin):
         try:
             tab.edits.approve(edit_id)
         except ValueError as e:
-            ui.notify(f"Could not apply edit: {e}", color="warning")
+            ui.notify(operator_error("编辑应用", e), color="warning", timeout=6000)
             return
         except KeyError:
-            ui.notify("Edit no longer pending", color="info")
+            ui.notify("该编辑已处理，无需重复操作。", color="info")
             return
         edit_decisions.record(edit_id.value, "applied")
         # approve() rewrote tab.source; push it into CodeMirror so the visible

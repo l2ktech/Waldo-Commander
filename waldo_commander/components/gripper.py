@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 
 from nicegui import ui
+from waldo_commander.operator_messages import operator_error
 
 import waldoctl
 from waldoctl import (
@@ -89,7 +90,10 @@ class GripperPage:
         try:
             tool = self._get_active_gripper()
             if tool is None:
-                ui.notify("No gripper available", color="warning")
+                ui.notify(
+                    "当前夹爪不可用。处理方法：请在设置中选择已连接的夹爪并确认状态在线。",
+                    color="warning",
+                )
                 return
             spd_kwargs: dict = {}
             if isinstance(tool, ElectricGripperTool):
@@ -105,7 +109,7 @@ class GripperPage:
             motion_recorder.record_action("gripper", position=position, **spd_kwargs)
         except Exception as e:
             logger.error("Gripper %s failed: %s", label.lower(), e)
-            ui.notify(f"{label} failed: {e}", color="negative")
+            ui.notify(operator_error(f"夹爪{label}", e), color="negative", timeout=6000)
 
     async def _stop_gripper(self) -> None:
         """Stop tool motion without changing the six-axis hold state."""
@@ -115,7 +119,7 @@ class GripperPage:
             )
         except Exception as error:
             logger.error("Gripper stop failed: %s", error)
-            ui.notify(f"夹爪停止失败：{error}", color="negative")
+            ui.notify(operator_error("夹爪停止", error), color="negative", timeout=6000)
 
     # ---- Build ----
 

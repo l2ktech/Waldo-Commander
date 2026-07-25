@@ -10,6 +10,7 @@ This package provides:
 
 from waldo_commander.services.urdf_scene.angle_pipeline import (
     init_buffers as init_angle_buffers,
+    reset_config as reset_angle_pipeline,
     update_urdf_angles,
 )
 from waldo_commander.services.urdf_scene.config import (
@@ -25,5 +26,6 @@ __all__ = [
     "ToolPose",
     "RobotAppearanceMode",
     "init_angle_buffers",
+    "reset_angle_pipeline",
     "update_urdf_angles",
 ]

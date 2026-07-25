@@ -5,6 +5,7 @@ kernel. Call init_buffers() once at startup, then update_urdf_angles() at 50Hz.
 """
 
 import logging
+from typing import Any
 
 import numpy as np
 
@@ -20,6 +21,7 @@ _angle_offsets_array: np.ndarray = np.zeros(6, dtype=np.float64)
 _index_mapping_array: np.ndarray = np.arange(6, dtype=np.int32)
 _urdf_reorder_array: np.ndarray = np.arange(6, dtype=np.int32)
 _config_valid: bool = False
+_configured_scene: Any = None
 
 
 def init_buffers(num_joints: int) -> None:
@@ -31,21 +33,25 @@ def init_buffers(num_joints: int) -> None:
     _angle_offsets_array = np.zeros(num_joints, dtype=np.float64)
     _index_mapping_array = np.arange(num_joints, dtype=np.int32)
     _urdf_reorder_array = np.arange(num_joints, dtype=np.int32)
+    reset_config()
 
 
-def _init_config() -> None:
+def reset_config() -> None:
+    """Discard scene-derived mappings before a page scene is replaced."""
+    global _config_valid, _configured_scene
+    _config_valid = False
+    _configured_scene = None
+
+
+def _init_config(scene: Any) -> None:
     """Precompute the index/sign/offset mappings the numba kernel needs, once after URDF scene init."""
-    global _config_valid
-
-    if not ui_state.urdf_scene:
-        _config_valid = False
-        return
+    global _config_valid, _configured_scene
 
     try:
-        config = ui_state.urdf_scene.config
+        config = scene.config
         index_mapping = ui_state.urdf_index_mapping
         joint_name_order = config.joint_name_order
-        urdf_joint_names = ui_state.urdf_scene.joint_names
+        urdf_joint_names = scene.joint_names
 
         num_joints = ui_state.active_robot.joints.count
 
@@ -80,22 +86,24 @@ def _init_config() -> None:
                 _urdf_reorder_array[i] = i
 
         _config_valid = True
+        _configured_scene = scene
         logger.debug("Angle pipeline config initialized")
 
     except (AttributeError, IndexError, TypeError) as e:
         logger.debug("Failed to init angle pipeline config: %s", e)
-        _config_valid = False
+        reset_config()
 
 
-def update_urdf_angles(angles_deg: np.ndarray) -> None:
+def update_urdf_angles(angles_deg: np.ndarray, scene: Any) -> None:
     """Update URDF scene with new joint angles (degrees -> radians)."""
-    global _config_valid
-
-    if not ui_state.urdf_scene or len(angles_deg) < ui_state.active_robot.joints.count:
+    if len(angles_deg) < ui_state.active_robot.joints.count:
         return
 
+    if not _config_valid or _configured_scene is not scene:
+        reset_config()
+        _init_config(scene)
     if not _config_valid:
-        _init_config()
+        return
 
     # Pass numpy array directly to numba pipeline (no copy needed)
     if not angle_pipeline(
@@ -108,4 +116,4 @@ def update_urdf_angles(angles_deg: np.ndarray) -> None:
     ):
         return
 
-    ui_state.urdf_scene.set_axis_values(_angles_ordered_buffer)
+    scene.set_axis_values(_angles_ordered_buffer)
