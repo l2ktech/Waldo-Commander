@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import atexit
 import contextlib
+import ipaddress
 import json
 import logging
 import math
@@ -1516,6 +1517,18 @@ def _build_takeover_overlay(message: str) -> None:
     )
 
 
+def _client_is_loopback(page_client: Client | None) -> bool:
+    """Return whether a page originates from local browser automation."""
+    if page_client is None:
+        return False
+    request_client = getattr(page_client.request, "client", None)
+    host = getattr(request_client, "host", "")
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
 @ui.page("/")
 async def index_page():
     global _page_state
@@ -1551,13 +1564,20 @@ async def index_page():
         and held_client.tab_id is not None
         and held_client.tab_id == this_client.tab_id
     )
-    if token_refresh or same_tab_refresh:
+    primary_replaces_local_automation = (
+        held_client is not None
+        and _client_is_loopback(held_client)
+        and not _client_is_loopback(this_client)
+    )
+    if token_refresh or same_tab_refresh or primary_replaces_local_automation:
         # Chrome establishes the replacement page before the old websocket
         # necessarily emits disconnect. The server-issued page token (or a
         # stable NiceGUI tab_id once available) identifies a primary refresh.
         _cleanup_page_resources(held_client)
         control_lease.release(BROWSER, held_client.id)
         ui_state.active_client_id = this_client.id
+        if primary_replaces_local_automation:
+            ui_state.active_page_token = secrets.token_urlsafe(18)
     elif held_id is None or held_client is None:
         ui_state.active_client_id = this_client.id
         ui_state.active_page_token = secrets.token_urlsafe(18)

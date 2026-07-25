@@ -144,41 +144,47 @@ def test_operator_errors_are_chinese_and_actionable(
 
 
 @pytest.mark.asyncio
-async def test_small_safe_terminal_miss_retries_same_absolute_target(
+async def test_small_safe_terminal_miss_adds_measured_residual(
     monkeypatch,
 ) -> None:
     panel = object.__new__(control.ControlPanel)
     calls: list[tuple[list[float], float, float]] = []
     encoder_refreshes = 0
+    panel._get_joint_limits = lambda _joint: (-180.0, 180.0)
 
     async def move_j(target, *, speed, accel, wait, timeout):
-        calls.append((target, speed, accel))
+        calls.append((list(target), speed, accel))
         assert wait is True
         assert timeout == 120.0
-        if len(calls) == 1:
-            raise RuntimeError(
-                "outcome=RESULT_UNKNOWN detail_code=OFFICIAL_MOTION_RUNTIME_REJECTED "
-                "stop_outcome=CONFIRMED_STOPPED detail=SAFE_TERMINAL "
-                "J1 terminal target error 0.550397 deg exceeds 0.500000 deg"
-            )
+        raise RuntimeError(
+            "outcome=RESULT_UNKNOWN detail_code=OFFICIAL_MOTION_RUNTIME_REJECTED "
+            "stop_outcome=CONFIRMED_STOPPED detail=SAFE_TERMINAL "
+            "J1 terminal target error 0.550397 deg exceeds 0.500000 deg"
+        )
 
     async def angles():
         nonlocal encoder_refreshes
         encoder_refreshes += 1
-        return [9.449603, 0.0, 0.0, 0.0, 0.0, 0.0]
+        if encoder_refreshes == 1:
+            return [9.449603, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     panel.client = SimpleNamespace(move_j=move_j, angles=angles)
     target = [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     await panel._move_j_with_terminal_correction(
         target,
+        joint_index=0,
         speed=1.0,
         accel=1.0,
         timeout=120.0,
     )
 
-    assert encoder_refreshes == 1
-    assert calls == [(target, 1.0, 1.0), (target, 0.2, 0.2)]
+    assert encoder_refreshes == 2
+    assert calls == [
+        (target, 1.0, 1.0),
+        ([10.550397, 0.0, 0.0, 0.0, 0.0, 0.0], 0.2, 0.2),
+    ]
 
 
 @pytest.mark.asyncio
@@ -198,6 +204,7 @@ async def test_small_safe_terminal_miss_retries_same_absolute_target(
 )
 async def test_terminal_correction_rejects_unsafe_or_unrelated_failures(error) -> None:
     panel = object.__new__(control.ControlPanel)
+    panel._get_joint_limits = lambda _joint: (-180.0, 180.0)
     calls = 0
 
     async def move_j(*_args, **_kwargs):
@@ -212,6 +219,7 @@ async def test_terminal_correction_rejects_unsafe_or_unrelated_failures(error) -
     with pytest.raises(RuntimeError, match=error):
         await panel._move_j_with_terminal_correction(
             [0.0] * 6,
+            joint_index=0,
             speed=1.0,
             accel=1.0,
             timeout=120.0,
@@ -220,7 +228,7 @@ async def test_terminal_correction_rejects_unsafe_or_unrelated_failures(error) -
 
 
 @pytest.mark.asyncio
-async def test_zdt_backend_rejects_simulator_toggle_before_client_call(
+async def test_zdt_backend_opens_isolated_simulator_before_client_call(
     monkeypatch,
 ) -> None:
     panel = object.__new__(control.ControlPanel)
@@ -234,22 +242,32 @@ async def test_zdt_backend_rejects_simulator_toggle_before_client_call(
         "robot",
         SimpleNamespace(backend_package="parol6_zdt_backend"),
     )
-    notifications: list[tuple[str, str]] = []
+    scripts: list[str] = []
+
+    async def run_javascript(script):
+        scripts.append(script)
+
     monkeypatch.setattr(
         control.ui,
-        "notify",
-        lambda message, *, color, **_kwargs: notifications.append((message, color)),
+        "run_javascript",
+        run_javascript,
     )
 
     await panel.on_toggle_sim()
 
-    assert notifications == [
-        (
-            "当前为 SocketCAN 真机后端，不能切换到页面仿真模式。"
-            "如需仿真，请启动独立的 FakeCAN 仿真实例。",
-            "info",
+    assert len(scripts) == 1
+    assert ":8012/" in scripts[0]
+
+
+def test_non_loopback_primary_browser_is_distinct_from_local_automation() -> None:
+    def page(host: str):
+        return SimpleNamespace(
+            request=SimpleNamespace(client=SimpleNamespace(host=host))
         )
-    ]
+
+    assert commander_main._client_is_loopback(page("127.0.0.1")) is True
+    assert commander_main._client_is_loopback(page("::1")) is True
+    assert commander_main._client_is_loopback(page("192.168.1.5")) is False
 
 
 def test_joint_limit_waypoints_never_exceed_receipt_delta() -> None:

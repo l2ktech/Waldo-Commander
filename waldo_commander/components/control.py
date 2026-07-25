@@ -644,19 +644,27 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
     )
 
 
-def _safe_terminal_error_deg(error: BaseException | str) -> float | None:
-    """Return a bounded correction error only after a confirmed safe stop."""
+def _safe_terminal_miss(
+    error: BaseException | str,
+) -> tuple[int, float, float] | None:
+    """Return ``(joint_index, error, tolerance)`` after a confirmed safe stop."""
     message = str(error)
     normalized = message.lower().replace(" ", "_").replace("-", "_")
     if "confirmed_stopped" not in normalized or "safe_terminal" not in normalized:
         return None
-    match = _RE_TERMINAL_TARGET_ERROR.search(message)
+    match = re.search(
+        r"J([1-6])\s+" + _RE_TERMINAL_TARGET_ERROR.pattern,
+        message,
+        re.IGNORECASE,
+    )
     if match is None:
         return None
-    error_deg, tolerance_deg = (float(value) for value in match.groups())
+    joint_index = int(match.group(1)) - 1
+    error_deg = float(match.group(2))
+    tolerance_deg = float(match.group(3))
     if error_deg <= tolerance_deg or error_deg > 1.0:
         return None
-    return error_deg
+    return joint_index, error_deg, tolerance_deg
 
 
 class ControlPanel:
@@ -826,57 +834,94 @@ class ControlPanel:
         self,
         target: list[float],
         *,
+        joint_index: int,
         speed: float,
         accel: float,
         timeout: float,
     ) -> None:
-        """Reissue an absolute target after a small, confirmed-safe miss."""
+        """Compensate a small external position miss after a confirmed stop."""
         correction_count = 0
-        previous_error = math.inf
+        previous_user_error = math.inf
+        command_target = list(target)
         while True:
             try:
                 await self.client.move_j(
-                    target,
+                    command_target,
                     speed=speed,
                     accel=accel,
                     wait=True,
                     timeout=timeout,
                 )
-                return
+                terminal_error: Exception | None = None
             except Exception as error:
-                error_deg = _safe_terminal_error_deg(error)
-                if (
-                    error_deg is None
-                    or correction_count >= self.TERMINAL_CORRECTION_ATTEMPTS
-                    or error_deg >= previous_error
-                ):
+                miss = _safe_terminal_miss(error)
+                if miss is None or miss[0] != joint_index:
                     raise
+                terminal_error = error
 
-                # Refresh the real encoders before reissuing the same absolute
-                # target. This closes the residual error without accumulating
-                # a blind relative offset or overlapping the previous grant.
-                actual = await self.client.angles()
-                if (
-                    actual is None
-                    or len(actual) < len(target)
-                    or not all(math.isfinite(float(value)) for value in actual)
-                ):
-                    raise
+            # A successful move and an eligible correction failure are both
+            # stopped terminals. Judge the original operator target using a
+            # fresh external joint position.
+            actual = await self.client.angles()
+            if (
+                actual is None
+                or len(actual) < len(target)
+                or not all(math.isfinite(float(value)) for value in actual)
+            ):
+                if terminal_error is not None:
+                    raise terminal_error
+                raise RuntimeError("terminal correction requires fresh joint angles")
 
-                correction_count += 1
-                previous_error = error_deg
-                speed = min(max(float(speed), 0.1), self.TERMINAL_CORRECTION_SPEED)
-                accel = min(
-                    max(float(accel), 0.1),
-                    self.TERMINAL_CORRECTION_ACCEL,
+            user_error = float(target[joint_index]) - float(actual[joint_index])
+            if abs(user_error) <= 0.5:
+                return
+            if (
+                correction_count >= self.TERMINAL_CORRECTION_ATTEMPTS
+                or abs(user_error) >= previous_user_error
+                or abs(user_error) > 1.0
+            ):
+                if terminal_error is not None:
+                    raise terminal_error
+                raise RuntimeError(
+                    f"J{joint_index + 1} terminal target error "
+                    f"{abs(user_error):.6f} deg exceeds 0.500000 deg"
                 )
-                logger.info(
-                    "Retrying absolute joint target after confirmed safe "
-                    "terminal miss %.6f deg (correction %d/%d)",
-                    error_deg,
-                    correction_count,
-                    self.TERMINAL_CORRECTION_ATTEMPTS,
-                )
+
+            # X42S defaults to a 0.8° arrival window. Reissuing the same target
+            # can finish without moving, so add the measured residual to the
+            # previous command target. This is bounded external-loop
+            # compensation, not an unbounded relative jog.
+            lo, hi = self._get_joint_limits(joint_index)
+            compensated = max(
+                lo,
+                min(
+                    hi,
+                    float(command_target[joint_index]) + user_error,
+                ),
+            )
+            if math.isclose(compensated, command_target[joint_index], abs_tol=1e-9):
+                if terminal_error is not None:
+                    raise terminal_error
+                raise RuntimeError("terminal correction is blocked by the soft limit")
+
+            command_target = list(actual[: len(target)])
+            command_target[joint_index] = compensated
+            correction_count += 1
+            previous_user_error = abs(user_error)
+            speed = min(max(float(speed), 0.1), self.TERMINAL_CORRECTION_SPEED)
+            accel = min(
+                max(float(accel), 0.1),
+                self.TERMINAL_CORRECTION_ACCEL,
+            )
+            logger.info(
+                "Compensating J%d terminal miss %.6f deg with command %.6f deg "
+                "(correction %d/%d)",
+                joint_index + 1,
+                user_error,
+                compensated,
+                correction_count,
+                self.TERMINAL_CORRECTION_ATTEMPTS,
+            )
 
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
         """Build cartesian axis lookup from the active robot's frame names.
@@ -1933,11 +1978,11 @@ class ControlPanel:
             spd = _norm_speed()
             await self._move_j_with_terminal_correction(
                 pose,
+                joint_index=joint_index,
                 speed=spd,
                 accel=_norm_accel(),
                 timeout=self.EXACT_MOVE_TIMEOUT_S,
             )
-            await self.client.angles()
 
         await self._run_incremental_move("joint", move)
 
@@ -1962,6 +2007,7 @@ class ControlPanel:
                 target[joint_index] = current
                 await self._move_j_with_terminal_correction(
                     target,
+                    joint_index=joint_index,
                     speed=spd,
                     accel=_norm_accel(),
                     timeout=self.EXACT_MOVE_TIMEOUT_S,
@@ -2058,8 +2104,6 @@ class ControlPanel:
         """Update Robot/Simulator toggle button appearance."""
         if self._robot_btn is None:
             return
-        if ui_state.active_robot.backend_package == "parol6_zdt_backend":
-            self._robot_btn.props("disable")
         if waldoctl.commander.status.simulator_active:
             self._robot_btn.props("color=amber-8")
             self._robot_btn.classes(add="glass-btn glass-amber")
@@ -2085,11 +2129,22 @@ class ControlPanel:
     async def on_toggle_sim(self) -> None:
         """Toggle between robot and simulator modes and update URDF appearance."""
         if ui_state.active_robot.backend_package == "parol6_zdt_backend":
-            ui.notify(
-                "当前为 SocketCAN 真机后端，不能切换到页面仿真模式。"
-                "如需仿真，请启动独立的 FakeCAN 仿真实例。",
-                color="info",
-                timeout=5000,
+            await ui.run_javascript(
+                "window.location.assign("
+                "window.location.protocol + '//' + window.location.hostname + ':8012/'"
+                ")"
+            )
+            return
+        if os.environ.get("WALDO_SIMULATOR_ONLY", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            await ui.run_javascript(
+                "window.location.assign("
+                "window.location.protocol + '//' + window.location.hostname + ':8011/'"
+                ")"
             )
             return
         try:
@@ -2714,10 +2769,14 @@ class ControlPanel:
             )
             robot_btn.mark("btn-robot-toggle")
             if ui_state.active_robot.backend_package == "parol6_zdt_backend":
-                robot_btn.props("disable")
-                robot_btn.tooltip(
-                    "SocketCAN 真机后端固定为 Robot；仿真需使用独立 FakeCAN 实例"
-                )
+                robot_btn.tooltip("打开隔离的 Simulator（真机连接保持不变）")
+            elif os.environ.get("WALDO_SIMULATOR_ONLY", "").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                robot_btn.tooltip("返回 SocketCAN Robot 控制页面")
             else:
                 robot_btn.tooltip("Robot/Simulator")
             self._robot_btn = robot_btn
