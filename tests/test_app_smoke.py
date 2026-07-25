@@ -99,6 +99,17 @@ def test_two_takeovers_route_real_angles_only_to_current_page(monkeypatch) -> No
     assert len(reset_calls) == 3
 
 
+def test_takeover_overlay_offers_explicit_control_recovery() -> None:
+    import inspect
+    import waldo_commander.main as subject
+
+    source = inspect.getsource(subject._build_takeover_overlay)
+
+    assert "接管控制" in source
+    assert "control_lease.release(BROWSER, held_client.id)" in source
+    assert "window.location.replace('/')" in source
+
+
 def test_read_only_mode_rejects_motion_without_backend_call(monkeypatch) -> None:
     from waldo_commander.components.control import ControlPanel
 

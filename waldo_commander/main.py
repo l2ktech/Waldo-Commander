@@ -1483,6 +1483,16 @@ def _build_takeover_overlay(message: str) -> None:
     # are defined when the run_javascript bootstrap fires below.
     ui.add_head_html('<script src="/static/js/robot-faces.js" defer></script>')
 
+    def take_control() -> None:
+        held_id = ui_state.active_client_id
+        held_client = Client.instances.get(held_id) if held_id is not None else None
+        if held_client is not None and held_client is not c:
+            _cleanup_page_resources(held_client)
+            control_lease.release(BROWSER, held_client.id)
+        ui_state.active_client_id = None
+        ui_state.active_page_token = None
+        ui.run_javascript("window.location.replace('/')")
+
     with ui.column().classes(
         "fixed inset-0 z-[9999] items-center justify-center bg-black/60"
     ):
@@ -1499,6 +1509,9 @@ def _build_takeover_overlay(message: str) -> None:
             ui.label(
                 "Only the primary Chrome window on this 5800X can control the robot."
             ).classes("text-xs text-center opacity-70")
+            ui.button("接管控制", on_click=take_control).props(
+                "color=primary unelevated"
+            ).classes("mt-3")
 
     # Bootstrap face animations + wandering. The robot-faces.js script tag
     # uses `defer`, so the functions may not be defined yet when this JS
