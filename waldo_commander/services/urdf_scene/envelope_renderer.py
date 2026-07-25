@@ -38,7 +38,9 @@ DEFAULT_ENVELOPE_SAMPLES = 500000
 ENVELOPE_CAP_DEPTH = 0.08  # 80mm visible cap depth on the sphere
 ENVELOPE_PROXIMITY_THRESHOLD = 0.10  # 100mm from boundary triggers display
 
-CACHE_DIR = Path.home() / ".waldo-commander"
+CACHE_DIR = Path(
+    os.environ.get("WALDO_CACHE_DIR", Path.home() / ".waldo-commander")
+).expanduser()
 HULL_STL_FILENAME = "workspace_hull.stl"
 HULL_STL_PATH = CACHE_DIR / HULL_STL_FILENAME
 

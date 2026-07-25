@@ -11,6 +11,7 @@ Environment=WALDO_READ_ONLY=0
 Environment=WALDO_SIMULATOR_ONLY=1
 Environment=WALDO_EXCLUSIVE_START=1
 Environment=NICEGUI_STORAGE_PATH=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.nicegui-simulator
+Environment=WALDO_CACHE_DIR=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.cache/waldo-commander
 Environment=NUMBA_CACHE_DIR=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.cache/numba
 Environment=LD_LIBRARY_PATH=/opt/nvidia/nsight-systems/2025.5.2/host-linux-x64:/opt/parol6-zdt/current/lib/python3.12/site-packages/cmeel.prefix/lib
 ExecStart=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.venv/bin/waldo-commander --robot parol6 --host 0.0.0.0 --port 8012 --controller-host 127.0.0.1 --controller-port 7401 --log-level INFO

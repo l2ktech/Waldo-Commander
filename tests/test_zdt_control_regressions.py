@@ -368,6 +368,57 @@ def test_non_loopback_primary_browser_is_distinct_from_local_automation() -> Non
     assert commander_main._client_is_loopback(page("192.168.1.5")) is False
 
 
+def test_only_real_browser_navigation_can_reserve_primary_slot(monkeypatch) -> None:
+    monkeypatch.delitem(commander_main.sys.modules, "pytest", raising=False)
+
+    def page(headers: dict[str, str]):
+        return SimpleNamespace(request=SimpleNamespace(headers=headers))
+
+    chrome_headers = {
+        "user-agent": "Mozilla/5.0 Chrome/140.0",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+    }
+    assert commander_main._client_is_browser_navigation(page(chrome_headers)) is True
+    assert (
+        commander_main._client_is_browser_navigation(
+            page({"user-agent": "curl/8.10.1"})
+        )
+        is False
+    )
+    assert (
+        commander_main._client_is_browser_navigation(
+            page({"user-agent": "Mozilla/5.0 Chrome/140.0"})
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_consumer_reconnects_after_transient_failure(monkeypatch) -> None:
+    attempts = 0
+    reconnected = asyncio.Event()
+
+    async def consume_once() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("transient IPC timeout")
+        reconnected.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(commander_main, "_status_consumer_once", consume_once)
+    monkeypatch.setattr(commander_main, "_shutting_down", False)
+
+    task = asyncio.create_task(commander_main._status_consumer())
+    try:
+        await asyncio.wait_for(reconnected.wait(), timeout=1.0)
+        assert attempts == 2
+    finally:
+        task.cancel()
+        await task
+
+
 def test_joint_limit_waypoints_never_exceed_receipt_delta() -> None:
     points = control._joint_limit_waypoints(-132.0, 180.0)
     assert points == [-42.0, 48.0, 138.0, 180.0]

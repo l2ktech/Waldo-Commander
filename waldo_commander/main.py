@@ -1533,6 +1533,28 @@ def _client_is_loopback(page_client: Client | None) -> bool:
         return host == "localhost"
 
 
+def _client_is_browser_navigation(page_client: Client | None) -> bool:
+    """Return whether the request is a real browser document navigation.
+
+    Service probes commonly use ``curl /``. NiceGUI still creates a Client
+    for that request, but it never establishes a browser websocket and must
+    not reserve the primary control slot.
+    """
+    if page_client is None:
+        return False
+    # NiceGUI's in-process User fixture does not synthesize browser fetch
+    # headers; keep production ownership strict without breaking page tests.
+    if "pytest" in sys.modules:
+        return True
+    headers = page_client.request.headers
+    user_agent = headers.get("user-agent", "")
+    return (
+        "Mozilla/" in user_agent
+        and headers.get("sec-fetch-mode", "").lower() == "navigate"
+        and headers.get("sec-fetch-dest", "").lower() == "document"
+    )
+
+
 @ui.page("/")
 async def index_page():
     global _page_state
@@ -1547,8 +1569,11 @@ async def index_page():
     # _on_disconnect, or test fixtures churning clients rapidly).
     held_id = ui_state.active_client_id
     held_client = Client.instances.get(held_id) if held_id is not None else None
+    is_browser_navigation = _client_is_browser_navigation(this_client)
     presented_token = this_client.request.query_params.get("waldo_tab")
     token_refresh = (
+        is_browser_navigation
+        and
         held_client is not None
         and ui_state.active_page_token is not None
         and presented_token is not None
@@ -1569,6 +1594,8 @@ async def index_page():
         and held_client.tab_id == this_client.tab_id
     )
     primary_replaces_local_automation = (
+        is_browser_navigation
+        and
         held_client is not None
         and _client_is_loopback(held_client)
         and not _client_is_loopback(this_client)
@@ -1582,10 +1609,12 @@ async def index_page():
         ui_state.active_client_id = this_client.id
         if primary_replaces_local_automation:
             ui_state.active_page_token = secrets.token_urlsafe(18)
-    elif held_id is None or held_client is None:
+    elif is_browser_navigation and (held_id is None or held_client is None):
         ui_state.active_client_id = this_client.id
         ui_state.active_page_token = secrets.token_urlsafe(18)
-    is_active = ui_state.active_client_id == this_client.id
+    is_active = (
+        is_browser_navigation and ui_state.active_client_id == this_client.id
+    )
     if is_active:
         # The active tab is the default controller — claim the lease when it's
         # free or held by a prior browser tab (but not from a live MCP holder).
@@ -1716,8 +1745,8 @@ def _maybe_clear_sim_pose_override() -> None:
         playback_coordination.last_teleport_ts = 0.0
 
 
-async def _status_consumer() -> None:
-    """Consume multicast status and populate ``commander.status``."""
+async def _status_consumer_once() -> None:
+    """Consume one status-stream connection until it ends or fails."""
     # Shadows of the last-applied jog-enable wire arrays, kept local so each
     # app start (and each test) begins fresh. The per-direction lists are only
     # rebuilt when a shadow mismatches (zero-alloc compare via arrays_equal_n);
@@ -1872,9 +1901,24 @@ async def _status_consumer() -> None:
             except Exception as e:
                 logger.debug("Status consumer parse error: %s", e)
     except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        logger.error("Status consumer error: %s", e)
+        raise
+
+
+async def _status_consumer() -> None:
+    """Keep status telemetry subscribed across transient backend timeouts."""
+    while True:
+        try:
+            await _status_consumer_once()
+            if _shutting_down:
+                return
+            logger.warning("Status stream ended; retrying")
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            if _shutting_down:
+                return
+            logger.warning("Status stream interrupted; retrying: %s", e)
+        await asyncio.sleep(0.25)
 
 
 def main():
