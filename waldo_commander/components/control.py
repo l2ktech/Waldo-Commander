@@ -427,7 +427,18 @@ class _ToolQuickActions:
 
         # Right action button
         if self._action_r_btn is not None:
-            if tool.action_r_labels is None:
+            if tool.key == "STS3215":
+                self._action_r_btn.classes(add="cp-disabled-strong")
+                if self._action_r_tooltip is None:
+                    with self._action_r_btn:
+                        self._action_r_tooltip = ui.tooltip(
+                            "当前 STS3215 ROS2 驱动不支持页面校准"
+                        )
+                else:
+                    self._action_r_tooltip.text = (
+                        "当前 STS3215 ROS2 驱动不支持页面校准"
+                    )
+            elif tool.action_r_labels is None:
                 self._action_r_btn.classes(add="cp-disabled-strong")
             else:
                 self._action_r_btn.classes(remove="cp-disabled-strong")
@@ -526,6 +537,12 @@ class _ToolQuickActions:
         tool = self._get_active_tool()
         if tool is None or tool.action_r_labels is None:
             return
+        if tool.key == "STS3215":
+            ui.notify(
+                "当前 STS3215 ROS2 驱动不支持页面校准；开合位置已使用现场标定值。",
+                color="info",
+            )
+            return
         try:
             await tool.action_r(not waldoctl.commander.status.tool.engaged)
         except Exception as e:
@@ -556,6 +573,49 @@ class _ToolQuickActions:
             ui.notify(operator_error("夹爪调节", e), color="negative", timeout=6000)
 
 
+class _AsyncPeriodicTimer:
+    """Periodic callback without a NiceGUI DOM parent slot."""
+
+    def __init__(
+        self,
+        interval: float,
+        callback: Callable[[], Any],
+        ui_client_fn: Callable[[], Any],
+    ) -> None:
+        self.interval = interval
+        self.callback = callback
+        self.ui_client_fn = ui_client_fn
+        self.active = False
+        self._cancelled = False
+        self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        try:
+            while not self._cancelled:
+                await asyncio.sleep(self.interval)
+                if not self.active:
+                    continue
+                client = self.ui_client_fn()
+                try:
+                    if client is None:
+                        continue
+                    with client:
+                        result = self.callback()
+                        if asyncio.iscoroutine(result):
+                            await result
+                except RuntimeError as error:
+                    logger.debug("Stopping detached jog timer: %s", error)
+                    self.active = False
+        except asyncio.CancelledError:
+            pass
+
+    def cancel(self, *, with_current_invocation: bool = False) -> None:
+        del with_current_invocation
+        self._cancelled = True
+        self.active = False
+        self._task.cancel()
+
+
 class _ClickHoldHandler:
     """Generic click-vs-hold detection for jog buttons.
 
@@ -563,10 +623,9 @@ class _ClickHoldHandler:
     Domain-specific behavior is injected via callbacks to on_change().
     """
 
-    def __init__(self, threshold_s: float, ui_client_fn: Callable[[], Any]) -> None:
+    def __init__(self, threshold_s: float) -> None:
         self._threshold_s = threshold_s
-        self._ui_client_fn = ui_client_fn
-        self._hold_timers: dict[Any, ui.timer] = {}
+        self._hold_timers: dict[Any, asyncio.Task[None]] = {}
         self._holding_active: set[Any] = set()
 
     def is_holding(self, key: Any) -> bool:
@@ -580,7 +639,7 @@ class _ClickHoldHandler:
         """Cancel any pending timer and clear hold state for a key."""
         tm = self._hold_timers.pop(key, None)
         if tm:
-            tm.active = False
+            tm.cancel()
         self._holding_active.discard(key)
 
     async def on_change(
@@ -605,30 +664,25 @@ class _ClickHoldHandler:
             # Cancel any existing timer for this key
             tm_prev = self._hold_timers.pop(key, None)
             if tm_prev:
-                tm_prev.active = False
+                tm_prev.cancel()
 
-            def _start_hold():
+            async def _start_hold() -> None:
+                await asyncio.sleep(self._threshold_s)
                 self._holding_active.add(key)
                 on_hold_start()
-                tm = self._hold_timers.pop(key, None)
-                if tm:
-                    tm.active = False
+                self._hold_timers.pop(key, None)
 
-            ui_client = self._ui_client_fn()
-            if ui_client:
-                with ui_client:
-                    self._hold_timers[key] = ui.timer(
-                        self._threshold_s, _start_hold, once=True
-                    )
+            self._hold_timers[key] = asyncio.create_task(_start_hold())
             return
 
         # Release path
         tm = self._hold_timers.pop(key, None)
         was_holding = key in self._holding_active
 
-        if tm and tm.active:
+        if tm and not tm.done():
             # Timer still running → this was a quick click
-            tm.active = False
+            tm.cancel()
+            await asyncio.gather(tm, return_exceptions=True)
             result = on_click()
             if asyncio.iscoroutine(result):
                 await result
@@ -642,10 +696,7 @@ class _ClickHoldHandler:
 
     def cleanup(self) -> None:
         for tm in self._hold_timers.values():
-            try:
-                tm.cancel(with_current_invocation=True)
-            except TypeError:
-                tm.cancel()
+            tm.cancel()
         self._hold_timers.clear()
         self._holding_active.clear()
 
@@ -687,6 +738,10 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
     message = str(error)
     return (
         "official motion returned before admission" in message
+        or (
+            "CONFIRMED_STOPPED" in message
+            and "post-disable mechanical stabilization deadline expired" in message
+        )
         or (
             "OPERATOR_STOP_CONFIRMED" in message
             and ("CANCELLED" in message or "CONFIRMED_STOPPED" in message)
@@ -894,6 +949,15 @@ class ControlPanel:
                         error = retry_error
                 if _is_operator_stop_terminal(error):
                     logger.info("Incremental %s move stopped by operator", label)
+                    try:
+                        await self.client.stop()
+                        await self.client.reset()
+                    except Exception as reset_error:
+                        logger.warning(
+                            "Safe stopped incremental %s move could not auto-reset: %s",
+                            label,
+                            reset_error,
+                        )
                     return
                 logger.error("Incremental %s move failed: %s", label, error)
                 ui_client = getattr(self, "_ui_client", None)
@@ -905,6 +969,13 @@ class ControlPanel:
                             color="negative",
                             timeout=6000,
                         )
+
+    async def _refresh_angles_best_effort(self) -> None:
+        """Refresh the readout without turning a completed move into a failure."""
+        try:
+            await self.client.angles()
+        except Exception as error:
+            logger.debug("Post-move angle refresh deferred to status stream: %s", error)
 
     async def _move_j_with_terminal_correction(
         self,
@@ -1673,7 +1744,7 @@ class ControlPanel:
                         wait=True,
                         timeout=self.INCREMENTAL_MOVE_TIMEOUT_S,
                     )
-                    await self.client.angles()
+                    await self._refresh_angles_best_effort()
 
             await self._run_incremental_move("joint", move)
 
@@ -1717,12 +1788,26 @@ class ControlPanel:
                     self._finish_jog_release(True)
                     return
                 signed_speed = speed if d == "pos" else -speed
-                await self.client.jog_j(
-                    j,
-                    speed=signed_speed,
-                    duration=self.STREAM_TIMEOUT_S,
-                    accel=_norm_accel(),
-                )
+                try:
+                    await self.client.jog_j(
+                        j,
+                        speed=signed_speed,
+                        duration=self.STREAM_TIMEOUT_S,
+                        accel=_norm_accel(),
+                    )
+                except Exception as error:
+                    self._jog_pressed_pos = [False] * self._n_joints
+                    self._jog_pressed_neg = [False] * self._n_joints
+                    ui_state.joint_jog_timer.active = False
+                    self._apply_pressed_style(self._joint_left_btns.get(j), False)
+                    self._apply_pressed_style(self._joint_right_btns.get(j), False)
+                    logger.error("Joint jog failed: %s", error)
+                    ui.notify(
+                        operator_error("关节点动", error),
+                        color="negative",
+                        timeout=6000,
+                    )
+                    return
             self._joint_cadence.tick(
                 time.time(),
                 self.JOG_TICK_S,
@@ -2379,7 +2464,7 @@ class ControlPanel:
         with (
             ui.tab_panels(jog_mode_tabs, value=joint_tab)
             .classes("cp-jog-panels")
-            .style("width: 400px; height: 225px")
+            .style("width: 400px; height: 270px")
         ):
             # Joint jog panel
             with ui.tab_panel(joint_tab).classes("gap-1"):
@@ -2396,7 +2481,7 @@ class ControlPanel:
 
                 def make_joint_row(idx: int, name: str):
                     with ui.grid(rows="auto", columns="60px auto 80px").classes(
-                        "items-center gap-3 w-full"
+                        f"items-center gap-3 w-full joint-jog-row joint-jog-row-{idx + 1}"
                     ):
                         ui.label(name).classes("text-right")
                         with ui.row().classes("w-full relative-position"):
@@ -2811,17 +2896,12 @@ class ControlPanel:
         self._ui_client = ui.context.client
         self.estop = _EStopManager(self.client, lambda: self._ui_client)
 
-        def ui_client_fn() -> object:
-            return self._ui_client
+        self._joint_click_hold = _ClickHoldHandler(self.CLICK_HOLD_THRESHOLD_S)
+        self._cart_click_hold = _ClickHoldHandler(self.CLICK_HOLD_THRESHOLD_S)
 
-        self._joint_click_hold = _ClickHoldHandler(
-            self.CLICK_HOLD_THRESHOLD_S, ui_client_fn
-        )
-        self._cart_click_hold = _ClickHoldHandler(
-            self.CLICK_HOLD_THRESHOLD_S, ui_client_fn
-        )
-
-        with ui.card().classes(f"overlay-panel overlay-card overlay-{anchor} gap-1"):
+        with ui.card().classes(
+            f"overlay-panel overlay-card overlay-{anchor} control-panel gap-1"
+        ):
             with ui.column().classes("gap-2 w-full"):
                 with ui.row().classes("items-center w-full"):
                     with ui.column().classes("gap-1 flex-grow"):
@@ -2838,6 +2918,23 @@ class ControlPanel:
 
             # Jog controls (tabs + grids)
             self.render_jog_content()
+
+        self.ensure_jog_timers()
+
+    def ensure_jog_timers(self) -> None:
+        """Create page-scoped jog timers before the controls can be pressed."""
+        if ui_state._joint_jog_timer is None:
+            ui_state.joint_jog_timer = _AsyncPeriodicTimer(
+                config.webapp_control_interval_s,
+                self.jog_tick,
+                lambda: self._ui_client,
+            )
+        if ui_state._cart_jog_timer is None:
+            ui_state.cart_jog_timer = _AsyncPeriodicTimer(
+                config.webapp_control_interval_s,
+                self.cart_jog_tick,
+                lambda: self._ui_client,
+            )
 
     def _build_speed_accel_rows(self) -> None:
         """Build speed and acceleration rating rows."""
@@ -2921,7 +3018,7 @@ class ControlPanel:
 
     def _build_action_row(self) -> None:
         """Build the action row: Home, Robot/Sim toggle, gizmo controls, camera reset, step input."""
-        with ui.row().classes("gap-2 items-center"):
+        with ui.row().classes("gap-2 items-center w-full flex-wrap"):
             ui.button(icon="home", on_click=self.send_home).props(
                 "dense round unelevated color=teal-6"
             ).tooltip("Home (H)").mark("btn-home")
@@ -3025,37 +3122,31 @@ class ControlPanel:
                 with self._step_input:
                     self._step_input_tooltip = ui.tooltip("Step size in degrees")
 
-            with ui.element("div").style(
-                "width: 0; height: 0; overflow: visible; position: relative;"
-            ):
-                self._fault_reset_btn = (
-                    ui.button(
-                        icon="restart_alt",
-                        color="positive",
-                        on_click=self.on_fault_reset_click,
-                    )
-                    .props("round unelevated dense")
-                    .classes("glass-btn text-xl")
-                    .style("position: absolute; top: -18px; left: 10px;")
-                    .tooltip("恢复控制：清除已确认停止的软件故障")
-                    .mark("btn-fault-reset")
+            self._fault_reset_btn = (
+                ui.button(
+                    "恢复",
+                    icon="restart_alt",
+                    color="positive",
+                    on_click=self.on_fault_reset_click,
                 )
+                .props("unelevated dense no-caps")
+                .classes("glass-btn control-reset-btn")
+                .tooltip("恢复控制：清除已确认停止的软件故障")
+                .mark("btn-fault-reset")
+            )
 
-            with ui.element("div").style(
-                "width: 0; height: 0; overflow: visible; position: relative;"
-            ):
-                self._estop_btn = (
-                    ui.button(
-                        icon="dangerous",
-                        color="negative",
-                        on_click=self.on_estop_click,
-                    )
-                    .props("round unelevated")
-                    .classes("glass-btn text-2xl")
-                    .style("position: absolute; top: -18px; left: 58px;")
-                    .tooltip("E-Stop (Esc)")
-                    .mark("btn-estop")
+            self._estop_btn = (
+                ui.button(
+                    "急停",
+                    icon="dangerous",
+                    color="negative",
+                    on_click=self.on_estop_click,
                 )
+                .props("unelevated no-caps")
+                .classes("glass-btn control-estop-btn")
+                .tooltip("软件急停 (Esc)")
+                .mark("btn-estop")
+            )
 
     def cleanup(self) -> None:
         """Cancel background timers during shutdown."""

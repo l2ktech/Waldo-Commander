@@ -7,7 +7,13 @@ def operator_error(action: str, error: BaseException | str) -> str:
     """Return a stable Chinese message without leaking backend internals."""
     normalized = str(error).lower()
 
-    if "capability_not_authorized" in normalized:
+    if "arm_global_gate_failed" in normalized:
+        reason = "运动准入状态暂时未恢复"
+        solution = "页面已停止本次连续点动；请点击“恢复”一次，系统会重新检查停止状态后开放操作"
+    elif "journal is unhealthy" in normalized or "journal failed" in normalized:
+        reason = "控制日志当前不可写或发生积压"
+        solution = "请点击“恢复”；若仍失败，请检查 worker 日志和磁盘状态，无需连续点击运动按钮"
+    elif "capability_not_authorized" in normalized:
         reason = "目标超出本次授权的运动范围"
         solution = "请减小步长或使用分段移动；若按钮仍可点击，请刷新页面后重试"
     elif "overlapping official motion" in normalized:

@@ -57,6 +57,8 @@ class GripperPage:
         self._last_lease_block_notify: float = 0.0
         self._user_dragging: bool = False
         self._target_initialized: bool = False
+        self._status_refreshing: bool = False
+        self._status_refresh_timer = None
 
     # ---- Helpers ----
 
@@ -96,7 +98,7 @@ class GripperPage:
                 )
                 return
             spd_kwargs: dict = {}
-            if isinstance(tool, ElectricGripperTool):
+            if isinstance(tool, ElectricGripperTool) and tool.key != "STS3215":
                 if waldoctl.commander.settings.gripper.speed_sync:
                     spd_kwargs["speed"] = waldoctl.commander.settings.jog.speed / 100.0
                 else:
@@ -121,6 +123,20 @@ class GripperPage:
             logger.error("Gripper stop failed: %s", error)
             ui.notify(operator_error("夹爪停止", error), color="negative", timeout=6000)
 
+    async def _refresh_tool_status(self) -> None:
+        if self._status_refreshing:
+            return
+        tool = self._get_active_gripper()
+        if tool is None:
+            return
+        self._status_refreshing = True
+        try:
+            await tool.status()
+        except Exception as error:
+            logger.debug("Gripper status refresh failed: %s", error)
+        finally:
+            self._status_refreshing = False
+
     # ---- Build ----
 
     def build(self) -> None:
@@ -130,6 +146,7 @@ class GripperPage:
         self._camera_card: ui.card | None = None
         self._camera_image: ui.interactive_image | None = None
         self._last_camera_active: bool = camera_service.active
+        self._status_refresh_timer = ui.timer(1.0, self._refresh_tool_status)
 
         self._state_dot: ui.icon | None = None
         self._state_label: ui.label | None = None
@@ -555,7 +572,12 @@ class GripperPage:
 
         # Current slider, shown for electric grippers only.
         def _electric_visible(k: str) -> bool:
-            return k != "NONE" and self._is_electric()
+            tool = self._get_active_gripper()
+            return (
+                k != "NONE"
+                and isinstance(tool, ElectricGripperTool)
+                and tool.current_range[1] > tool.current_range[0]
+            )
 
         ui.label("mA").classes("text-xs text-[var(--ctk-muted)]").bind_visibility_from(
             waldoctl.commander.status.tool,
@@ -602,6 +624,12 @@ class GripperPage:
         _update_current_range()  # apply immediately if tool already set
 
     def _build_speed_section(self) -> None:
+        tool = self._get_active_gripper()
+        if tool is not None and tool.key == "STS3215":
+            ui.label("速度由 STS3215 ROS2 驱动固定管理").classes(
+                "text-xs text-[var(--ctk-muted)] pt-2"
+            )
+            return
         ui.label("Speed").classes("text-xs text-[var(--ctk-muted)] pt-2")
         with ui.row().classes("col-span-2 w-full items-center gap-2 no-wrap pt-2"):
             (
@@ -639,5 +667,7 @@ class GripperPage:
 
     def cleanup(self) -> None:
         """Remove listeners when panel is destroyed."""
+        if self._status_refresh_timer is not None:
+            self._status_refresh_timer.cancel()
         if self._current_range_listener is not None:
             robot_state.remove_change_listener(self._current_range_listener)

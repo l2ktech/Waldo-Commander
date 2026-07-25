@@ -137,6 +137,7 @@ class _PageState:
 
 
 _page_state: _PageState | None = None
+_page_build_lock: asyncio.Lock = asyncio.Lock()
 _TAKEOVER_TOKEN_TTL_S = 15.0
 _pending_takeovers: dict[str, tuple[str, float]] = {}
 
@@ -1206,7 +1207,7 @@ def _register_handlers() -> None:
     async def _restore_settings() -> None:
         """Restore persisted motion profile and tool selection."""
         if skip_startup_commands:
-            logger.info("Skipping motion profile/tool startup commands")
+            logger.info("Skipping motion profile startup command")
         else:
             try:
                 saved_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")
@@ -1215,24 +1216,31 @@ def _register_handlers() -> None:
             except Exception as e:
                 logger.warning("startup: select_profile failed: %s", e)
 
-            try:
-                saved_tool = ng_app.storage.general.get("selected_tool", "")
-                if saved_tool:
-                    # initialize_urdf_scene already reads the same variant
-                    # storage key when wiring the scene mesh; pass it to
-                    # select_tool too so the controller's per-variant TCP
-                    # matches the scene on first boot.
-                    saved_variant = ng_app.storage.general.get(
-                        f"tool_variant_{saved_tool}", ""
-                    )
-                    await client.select_tool(saved_tool, variant_key=saved_variant)
-                    logger.debug(
-                        "startup: set tool to %s (variant=%r)",
-                        saved_tool,
-                        saved_variant,
-                    )
-            except Exception as e:
-                logger.warning("startup: select_tool failed: %s", e)
+        try:
+            default_tool = os.environ.get("WALDO_DEFAULT_TOOL", "")
+            if (
+                not default_tool
+                and ui_state.active_robot.backend_package == "parol6_zdt_backend"
+            ):
+                default_tool = "STS3215"
+            saved_tool = ng_app.storage.general.get("selected_tool", default_tool)
+            if not saved_tool or (
+                saved_tool == "NONE" and default_tool == "STS3215"
+            ):
+                saved_tool = default_tool
+            if saved_tool:
+                saved_variant = ng_app.storage.general.get(
+                    f"tool_variant_{saved_tool}", ""
+                )
+                await client.select_tool(saved_tool, variant_key=saved_variant)
+                ng_app.storage.general["selected_tool"] = saved_tool
+                logger.info(
+                    "startup: set tool to %s (variant=%r)",
+                    saved_tool,
+                    saved_variant,
+                )
+        except Exception as e:
+            logger.warning("startup: select_tool failed: %s", e)
 
         # Adopt the controller's applied collision world (installation shapes
         # exist even with no program loaded — the GUI must ask, not push).
@@ -1652,8 +1660,7 @@ def _client_is_browser_navigation(page_client: Client | None) -> bool:
     return "Mozilla/" in user_agent
 
 
-@ui.page("/")
-async def index_page():
+async def _index_page_locked() -> None:
     global _page_state
     this_client = ui.context.client
     # Don't set _page_state yet — wait until panels are built so the
@@ -1683,6 +1690,10 @@ async def index_page():
     )
     if is_browser_navigation:
         if held_client is not None and held_client is not this_client:
+            with held_client:
+                _build_takeover_overlay(
+                    "控制权已转移到其他浏览器，刷新本页即可重新取得控制"
+                )
             _cleanup_page_resources(held_client)
             control_lease.release(BROWSER, held_client.id)
         ui_state.active_client_id = this_client.id
@@ -1770,17 +1781,9 @@ async def index_page():
     if not _is_active_page(page_state):
         return
 
-    # Wire jog timers to ui_state so the control panel can access them.
-    ui_state.joint_jog_timer = ui.timer(
-        interval=config.webapp_control_interval_s,
-        callback=control_panel.jog_tick,
-        active=False,
-    )
-    ui_state.cart_jog_timer = ui.timer(
-        interval=config.webapp_control_interval_s,
-        callback=control_panel.cart_jog_tick,
-        active=False,
-    )
+    # build() wires these before buttons become interactive; keep this
+    # idempotent fallback for tests or alternate page builders.
+    control_panel.ensure_jog_timers()
 
     if ui_state.response_log:
         attach_ui_log(ui_state.response_log)
@@ -1796,6 +1799,15 @@ async def index_page():
         readiness_state.mark_page_done()
 
     asyncio.create_task(_mark_page_done())
+
+
+@ui.page("/")
+async def index_page() -> None:
+    # Two browsers often reconnect together after a service restart. The UI
+    # components and page timers are process singletons, so their teardown and
+    # rebuild must not interleave.
+    async with _page_build_lock:
+        await _index_page_locked()
 
 
 def _maybe_clear_sim_pose_override() -> None:

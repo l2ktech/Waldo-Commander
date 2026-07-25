@@ -359,6 +359,11 @@ class SettingsContent:
             tool_options[tool.key] = tool.display_name
 
         default_tool = next(iter(tool_options), "NONE")
+        if (
+            ui_state.active_robot.backend_package == "parol6_zdt_backend"
+            and "STS3215" in tool_options
+        ):
+            default_tool = "STS3215"
         stored_tool = ng_app.storage.general.get("selected_tool", default_tool)
         if stored_tool not in tool_options:
             stored_tool = default_tool

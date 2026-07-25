@@ -122,8 +122,11 @@ CAMERA_FEED_H = 480
 WAYPOINT_SIZE_LARGE = 0.008  # Editable targets (with TransformControls)
 WAYPOINT_SIZE_SMALL = 0.004  # Non-editable segment endpoints
 
-# Click vs hold threshold for jog buttons and keyboard shortcuts
-CLICK_HOLD_THRESHOLD_S: float = 0.15
+# NiceGUI delivers press/release as separate WebSocket events. 150 ms was
+# shorter than normal LAN + event-loop jitter and misclassified ordinary
+# clicks as zero-length holds. Keep clicks responsive while requiring an
+# intentional hold before continuous Jog begins.
+CLICK_HOLD_THRESHOLD_S: float = 0.35
 
 # Core panel tab ids a plugin panel may never claim. Lives here (not main.py)
 # so components can import it without importing main — importing main from a

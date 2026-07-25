@@ -800,6 +800,26 @@ body.body--light .wc-mode-autopilot  { --mode-accent-text: var(--color-violet-70
 .overlay-tr { top: 12px; right: 12px; }
 .overlay-bl { bottom: 12px; left: 12px; }
 .overlay-br { bottom: 12px; right: 12px; }
+.control-panel {
+  width: 420px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: hidden !important;
+}
+.control-panel .cp-jog-panels {
+  max-width: 100%;
+}
+.control-panel .q-tab-panel {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.control-panel .control-estop-btn {
+  min-width: 72px !important;
+  font-weight: 700;
+}
+.control-panel .control-reset-btn {
+  min-width: 66px !important;
+}
 .overlay-right {
   position: absolute;
   top: 50%;
