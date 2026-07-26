@@ -143,8 +143,23 @@ async def warm_process_pool(backend_package: str = "parol6") -> None:
         logger.debug("Skipping process pool warming in test environment")
         return
 
-    # ProcessPoolExecutor uses cpu_count() workers by default
-    worker_count = os.cpu_count() or 4
+    # Pre-warming every logical CPU imports Pinokin/NumPy into each child and
+    # made the 5800X hardware page consume about 2 GiB before any simulation.
+    # Two warm workers keep the first preview responsive without eagerly
+    # spawning the executor's entire cpu_count-sized pool.
+    available_workers = os.cpu_count() or 1
+    configured_workers = os.environ.get("WALDO_PROCESS_WARM_WORKERS", "2")
+    try:
+        worker_count = max(0, min(int(configured_workers), available_workers))
+    except ValueError:
+        logger.warning(
+            "Invalid WALDO_PROCESS_WARM_WORKERS=%r; using 2",
+            configured_workers,
+        )
+        worker_count = min(2, available_workers)
+    if worker_count == 0:
+        logger.info("Process pool warming disabled")
+        return
     logger.info(
         "Warming %d process pool workers (importing %s)...",
         worker_count,
