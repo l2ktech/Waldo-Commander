@@ -97,7 +97,11 @@ logger = logging.getLogger(__name__)
 def _urdf_angle_signs(backend_package: str) -> list[int]:
     """Visual-only joint signs; hardware calibration remains untouched."""
     if backend_package == "parol6_zdt_backend":
-        return [-1, 1, 1, 1, 1, 1]
+        # The installed ZDT arm has the base and wrist-roll URDF axes opposite
+        # to the calibrated controller coordinates.  Keep this correction in
+        # the scene only: changing the hardware direction would also invert
+        # motion commands, soft limits, FK, and position proofs.
+        return [-1, 1, 1, -1, 1, 1]
     return [1, 1, 1, 1, 1, 1]
 
 
