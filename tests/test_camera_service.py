@@ -127,6 +127,32 @@ def test_backend_fallback_to_opencv_when_linuxpy_fails():
 
 
 @pytest.mark.unit
+def test_exclusive_capture_temporarily_releases_and_restores_camera():
+    class FakeLinuxpy(LinuxpyBackend):
+        def open(self, device, width, height):
+            return True
+
+        def read_frame(self):
+            return _SAMPLE_JPEG
+
+        def close(self):
+            pass
+
+    cs = CameraService()
+    with (
+        patch("waldo_commander.services.camera_service.LinuxpyBackend", FakeLinuxpy),
+        patch("waldo_commander.services.camera_service.sys") as mock_sys,
+    ):
+        mock_sys.platform = "linux"
+        cs.start(4, width=640, height=480)
+        assert cs.suspend_for_exclusive_capture() is True
+        assert not cs.active
+        assert cs.resume_after_exclusive_capture() is True
+        assert cs.active
+    cs.stop()
+
+
+@pytest.mark.unit
 def test_v4l2_cli_enumeration_skips_metadata_nodes(tmp_path):
     video0 = tmp_path / "video0"
     video1 = tmp_path / "video1"

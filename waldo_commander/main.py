@@ -184,10 +184,16 @@ def _update_connection_notification() -> None:
 
 
 def _ping_state_after_sample(
-    *, last_ok: bool, failures: int, sample_ok: bool
+    *,
+    last_ok: bool,
+    failures: int,
+    sample_ok: bool,
+    suppress_failure: bool = False,
 ) -> tuple[bool, int]:
     """Require repeated failed pings before hiding otherwise-live hardware."""
     if sample_ok:
+        return True, 0
+    if suppress_failure and last_ok:
         return True, 0
     next_failures = min(int(failures) + 1, _PING_FAILURES_BEFORE_DISCONNECT)
     if not last_ok or next_failures >= _PING_FAILURES_BEFORE_DISCONNECT:
@@ -464,6 +470,7 @@ async def check_ping() -> None:
             last_ok=ps.last_ping_ok,
             failures=ps.ping_failures,
             sample_ok=sample_ok,
+            suppress_failure=is_any_program_running(),
         )
         if new_ok != ps.last_ping_ok:
             logger.debug(
@@ -488,6 +495,7 @@ async def check_ping() -> None:
             last_ok=ps.last_ping_ok,
             failures=ps.ping_failures,
             sample_ok=False,
+            suppress_failure=is_any_program_running(),
         )
         if ps.last_ping_ok and not new_ok:
             logger.debug("ping: connected True → False (exception)")

@@ -25,7 +25,7 @@ import subprocess
 import sys
 from typing import Protocol
 
-from fastapi import Response
+from fastapi import HTTPException, Request, Response
 from starlette.responses import StreamingResponse
 
 from nicegui import app as ng_app, run
@@ -172,6 +172,10 @@ class CameraService:
         self._latest_jpeg: bytes = _BLACK_1PX
         self._active: bool = False
         self._capture_task: asyncio.Task | None = None
+        self._configured_device: int | str | None = None
+        self._configured_width = 640
+        self._configured_height = 480
+        self._suspended_for_exclusive = False
 
     @property
     def active(self) -> bool:
@@ -179,7 +183,11 @@ class CameraService:
 
     def start(self, device: int | str, width: int = 640, height: int = 480) -> None:
         """Open a camera device and begin capturing."""
-        self.stop()
+        self._release_capture()
+        self._configured_device = device
+        self._configured_width = width
+        self._configured_height = height
+        self._suspended_for_exclusive = False
 
         backend: CaptureBackend | None = None
 
@@ -204,6 +212,29 @@ class CameraService:
 
     def stop(self) -> None:
         """Release the camera device and stop the capture loop."""
+        self._release_capture()
+        self._configured_device = None
+        self._suspended_for_exclusive = False
+
+    def suspend_for_exclusive_capture(self) -> bool:
+        """Temporarily release the configured camera for a local depth capture."""
+        if not self._active or self._configured_device is None:
+            return False
+        self._suspended_for_exclusive = True
+        self._release_capture()
+        return True
+
+    def resume_after_exclusive_capture(self) -> bool:
+        """Restore the camera stream after a cooperative exclusive capture."""
+        if not self._suspended_for_exclusive or self._configured_device is None:
+            return False
+        device = self._configured_device
+        width = self._configured_width
+        height = self._configured_height
+        self.start(device, width=width, height=height)
+        return self._active
+
+    def _release_capture(self) -> None:
         self._active = False
         if self._capture_task is not None:
             self._capture_task.cancel()
@@ -370,3 +401,23 @@ async def _tool_camera_frame() -> Response:
     if not camera_service.active:
         return _PLACEHOLDER
     return Response(content=camera_service.get_latest_frame(), media_type="image/jpeg")
+
+
+def _require_local_camera_control(request: Request) -> None:
+    host = request.client.host if request.client is not None else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="local camera control only")
+
+
+@ng_app.post("/tool/camera/exclusive/begin")
+async def _tool_camera_exclusive_begin(request: Request) -> dict[str, bool]:
+    """Release the page camera so a same-host RealSense capture can run."""
+    _require_local_camera_control(request)
+    return {"suspended": camera_service.suspend_for_exclusive_capture()}
+
+
+@ng_app.post("/tool/camera/exclusive/end")
+async def _tool_camera_exclusive_end(request: Request) -> dict[str, bool]:
+    """Restore the page camera after a same-host RealSense capture."""
+    _require_local_camera_control(request)
+    return {"resumed": camera_service.resume_after_exclusive_capture()}

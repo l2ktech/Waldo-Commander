@@ -16,3 +16,12 @@ def test_success_resets_ping_failure_hysteresis() -> None:
 
 def test_disconnected_startup_does_not_claim_hardware() -> None:
     assert _ping_state_after_sample(last_ok=False, failures=0, sample_ok=False) == (False, 1)
+
+
+def test_running_program_keeps_last_confirmed_connection_on_ping_failure() -> None:
+    assert _ping_state_after_sample(
+        last_ok=True,
+        failures=2,
+        sample_ok=False,
+        suppress_failure=True,
+    ) == (True, 0)
