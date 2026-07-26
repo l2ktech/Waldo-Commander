@@ -170,6 +170,21 @@ def test_jog_enablement_uses_independent_safety_state_caches(monkeypatch) -> Non
         for elem in panel._cart_axis_imgs.values()
     )
 
+    # The live status adapter mutates direction arrays in place. Value-based
+    # caching must still observe the change and refresh the affected buttons.
+    status.joints.can_jog_pos[0] = False
+    available.can_jog_pos[0] = False
+    panel.refresh_joint_enablement()
+    panel.sync_cartesian_button_states()
+    assert "cp-disabled-strong" in panel._joint_right_btns[0].class_names
+    assert "cp-disabled-strong" in panel._cart_axis_imgs["X+"].class_names
+    status.joints.can_jog_pos[0] = True
+    available.can_jog_pos[0] = True
+    panel.refresh_joint_enablement()
+    panel.sync_cartesian_button_states()
+    assert "cp-disabled-strong" not in panel._joint_right_btns[0].class_names
+    assert "cp-disabled-strong" not in panel._cart_axis_imgs["X+"].class_names
+
     # These calls run in this exact order in the status consumer. Before the
     # regression fix, the joint call updated a shared editing-mode cache and
     # the cartesian call returned early with stale enabled visuals.
@@ -231,7 +246,7 @@ async def test_incremental_moves_reject_overlapping_clicks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) -> None:
+async def test_unreachable_incremental_move_is_non_fault_feedback(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     panel._incremental_move_lock = asyncio.Lock()
 
@@ -257,10 +272,8 @@ async def test_incremental_move_failure_is_visible_to_the_operator(monkeypatch) 
 
     assert notifications == [
         (
-            "笛卡尔动作失败：操作未完成，系统已保留诊断信息。"
-            "处理方法：请先确认页面状态正常后重试；"
-            "若再次失败，请查看服务日志或联系维护人员。",
-            "negative",
+            "该方向当前不可达，机械臂未执行并保持停止。请反向移动或调整姿态。",
+            "info",
         )
     ]
 

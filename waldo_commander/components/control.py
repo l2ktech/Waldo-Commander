@@ -771,6 +771,18 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
     )
 
 
+def _benign_motion_rejection(error: BaseException) -> str | None:
+    """Translate normal workspace boundaries into non-fault UI feedback."""
+    message = str(error).upper()
+    if "SELF_COLLISION" in message or "COLLISION" in message:
+        return "该方向已因预测碰撞停止，机械臂保持安全。请反向移动或调整姿态。"
+    if "SOFT_LIMIT" in message or "JOINT_LIMIT" in message or "OUT_OF_RANGE" in message:
+        return "已到达当前运动边界，机械臂停在允许位置。请反向移动。"
+    if "IK_" in message or "UNREACHABLE" in message or "POSITION_INVALID" in message:
+        return "该方向当前不可达，机械臂未执行并保持停止。请反向移动或调整姿态。"
+    return None
+
+
 def _safe_terminal_miss(
     error: BaseException | str,
 ) -> tuple[int, float, float] | None:
@@ -912,12 +924,12 @@ class ControlPanel:
         # updates). The status consumer reassigns the per-direction jog lists
         # wholesale only when the wire arrays change, so a reference-identity
         # check detects "unchanged since last tick" with zero allocation.
-        self._last_joint_pos: list[bool] | None = None
-        self._last_joint_neg: list[bool] | None = None
-        self._last_cart_wrf_pos: list[bool] | None = None
-        self._last_cart_wrf_neg: list[bool] | None = None
-        self._last_cart_trf_pos: list[bool] | None = None
-        self._last_cart_trf_neg: list[bool] | None = None
+        self._last_joint_pos: tuple[bool, ...] | None = None
+        self._last_joint_neg: tuple[bool, ...] | None = None
+        self._last_cart_wrf_pos: tuple[bool, ...] | None = None
+        self._last_cart_wrf_neg: tuple[bool, ...] | None = None
+        self._last_cart_trf_pos: tuple[bool, ...] | None = None
+        self._last_cart_trf_neg: tuple[bool, ...] | None = None
         self._last_joint_controls_available: bool | None = None
         self._last_cart_controls_available: bool | None = None
         self._gizmo_auto_hidden: bool = (
@@ -988,6 +1000,22 @@ class ControlPanel:
                             label,
                             reset_error,
                         )
+                    return
+                benign_message = _benign_motion_rejection(error)
+                if benign_message is not None:
+                    logger.info(
+                        "Incremental %s move stopped at a workspace boundary: %s",
+                        label,
+                        error,
+                    )
+                    ui_client = getattr(self, "_ui_client", None)
+                    if ui_client is not None:
+                        with ui_client:
+                            ui.notify(
+                                benign_message,
+                                color="info",
+                                timeout=3000,
+                            )
                     return
                 logger.error("Incremental %s move failed: %s", label, error)
                 ui_client = getattr(self, "_ui_client", None)
@@ -1283,17 +1311,20 @@ class ControlPanel:
         neg = joints.can_jog_neg
         controls_available = self._jog_controls_available()
 
-        # Skip if state unchanged. The producer swaps the lists wholesale only
-        # on change, so identity comparison is a zero-alloc dirty check.
+        # Status adapters may mutate the same list object in place. Cache a
+        # value snapshot so a completed move cannot leave the buttons stuck in
+        # the temporary busy/disabled state.
+        pos_snapshot = tuple(bool(value) for value in pos)
+        neg_snapshot = tuple(bool(value) for value in neg)
         if (
             controls_available == self._last_joint_controls_available
-            and pos is self._last_joint_pos
-            and neg is self._last_joint_neg
+            and pos_snapshot == self._last_joint_pos
+            and neg_snapshot == self._last_joint_neg
         ):
             return
         self._last_joint_controls_available = controls_available
-        self._last_joint_pos = pos
-        self._last_joint_neg = neg
+        self._last_joint_pos = pos_snapshot
+        self._last_joint_neg = neg_snapshot
 
         if (
             not controls_available
@@ -1328,22 +1359,26 @@ class ControlPanel:
         trf_neg = av_trf.can_jog_neg if av_trf else None
         controls_available = self._jog_controls_available()
 
-        # Identity dirty check against the four per-direction lists (the
-        # producer swaps them wholesale only on change), so no per-tick
-        # flatten / tuple allocation.
+        # Status adapters may mutate these lists in place, so compare value
+        # snapshots. Identity caching can strand Cartesian controls in the
+        # disabled state after a move completes.
+        wrf_pos_snapshot = None if wrf_pos is None else tuple(bool(v) for v in wrf_pos)
+        wrf_neg_snapshot = None if wrf_neg is None else tuple(bool(v) for v in wrf_neg)
+        trf_pos_snapshot = None if trf_pos is None else tuple(bool(v) for v in trf_pos)
+        trf_neg_snapshot = None if trf_neg is None else tuple(bool(v) for v in trf_neg)
         if (
             controls_available == self._last_cart_controls_available
-            and wrf_pos is self._last_cart_wrf_pos
-            and wrf_neg is self._last_cart_wrf_neg
-            and trf_pos is self._last_cart_trf_pos
-            and trf_neg is self._last_cart_trf_neg
+            and wrf_pos_snapshot == self._last_cart_wrf_pos
+            and wrf_neg_snapshot == self._last_cart_wrf_neg
+            and trf_pos_snapshot == self._last_cart_trf_pos
+            and trf_neg_snapshot == self._last_cart_trf_neg
         ):
             return
         self._last_cart_controls_available = controls_available
-        self._last_cart_wrf_pos = wrf_pos
-        self._last_cart_wrf_neg = wrf_neg
-        self._last_cart_trf_pos = trf_pos
-        self._last_cart_trf_neg = trf_neg
+        self._last_cart_wrf_pos = wrf_pos_snapshot
+        self._last_cart_wrf_neg = wrf_neg_snapshot
+        self._last_cart_trf_pos = trf_pos_snapshot
+        self._last_cart_trf_neg = trf_neg_snapshot
 
         if not controls_available:
             for ax in _AXIS_ORDER:

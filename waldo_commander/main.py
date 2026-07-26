@@ -201,6 +201,14 @@ def _ping_state_after_sample(
     return True, next_failures
 
 
+def _suppress_transient_ping_failure() -> bool:
+    """Keep a live page online while its motion IPC call owns the connection."""
+    return is_any_program_running() or bool(
+        control_panel is not None
+        and getattr(control_panel, "_incremental_busy", False)
+    )
+
+
 def _is_active_page(page_state: _PageState) -> bool:
     """Return whether ``page_state`` still owns the active browser slot."""
     return (
@@ -470,7 +478,7 @@ async def check_ping() -> None:
             last_ok=ps.last_ping_ok,
             failures=ps.ping_failures,
             sample_ok=sample_ok,
-            suppress_failure=is_any_program_running(),
+            suppress_failure=_suppress_transient_ping_failure(),
         )
         if new_ok != ps.last_ping_ok:
             logger.debug(
@@ -495,7 +503,7 @@ async def check_ping() -> None:
             last_ok=ps.last_ping_ok,
             failures=ps.ping_failures,
             sample_ok=False,
-            suppress_failure=is_any_program_running(),
+            suppress_failure=_suppress_transient_ping_failure(),
         )
         if ps.last_ping_ok and not new_ok:
             logger.debug("ping: connected True → False (exception)")
