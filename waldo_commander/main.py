@@ -134,11 +134,13 @@ class _PageState:
     scene_init_timer: ui.timer | None = None
     urdf_scene: UrdfScene | None = None
     last_ping_ok: bool = False
+    ping_failures: int = 0
 
 
 _page_state: _PageState | None = None
 _page_build_lock: asyncio.Lock = asyncio.Lock()
 _TAKEOVER_TOKEN_TTL_S = 15.0
+_PING_FAILURES_BEFORE_DISCONNECT = 3
 _pending_takeovers: dict[str, tuple[str, float]] = {}
 
 # Pre-allocated buffers for numba pipelines (scratch space)
@@ -179,6 +181,18 @@ def _update_connection_notification() -> None:
     elif not needs_warning and ps.connection_notification is not None:
         ps.connection_notification.dismiss()
         ps.connection_notification = None
+
+
+def _ping_state_after_sample(
+    *, last_ok: bool, failures: int, sample_ok: bool
+) -> tuple[bool, int]:
+    """Require repeated failed pings before hiding otherwise-live hardware."""
+    if sample_ok:
+        return True, 0
+    next_failures = min(int(failures) + 1, _PING_FAILURES_BEFORE_DISCONNECT)
+    if not last_ok or next_failures >= _PING_FAILURES_BEFORE_DISCONNECT:
+        return False, next_failures
+    return True, next_failures
 
 
 def _is_active_page(page_state: _PageState) -> bool:
@@ -445,7 +459,12 @@ async def check_ping() -> None:
 
     try:
         result = await client.ping()
-        new_ok = result.hardware_connected if result else False
+        sample_ok = bool(result.hardware_connected) if result else False
+        new_ok, ps.ping_failures = _ping_state_after_sample(
+            last_ok=ps.last_ping_ok,
+            failures=ps.ping_failures,
+            sample_ok=sample_ok,
+        )
         if new_ok != ps.last_ping_ok:
             logger.debug(
                 "ping: connected %s → %s (hw_connected=%s, result=%s)",
@@ -465,9 +484,14 @@ async def check_ping() -> None:
         ps.last_ping_ok = new_ok
     except Exception as e:
         logger.debug("ping failed: %s", e)
-        if ps.last_ping_ok:
+        new_ok, ps.ping_failures = _ping_state_after_sample(
+            last_ok=ps.last_ping_ok,
+            failures=ps.ping_failures,
+            sample_ok=False,
+        )
+        if ps.last_ping_ok and not new_ok:
             logger.debug("ping: connected True → False (exception)")
-        ps.last_ping_ok = False
+        ps.last_ping_ok = new_ok
 
     # A ping that was in flight when shutdown began can resume here after
     # _clear_commander has run; bail before touching the commander surface.
