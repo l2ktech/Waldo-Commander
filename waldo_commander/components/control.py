@@ -839,6 +839,7 @@ class ControlPanel:
         self._joint_click_hold: _ClickHoldHandler | None = None
         self._cart_click_hold: _ClickHoldHandler | None = None
         self._incremental_move_lock = asyncio.Lock()
+        self._incremental_busy = False
 
         # Settings content for cleanup
         self._settings_content: "SettingsContent | None" = None
@@ -923,8 +924,11 @@ class ControlPanel:
                     )
             return
         async with self._incremental_move_lock:
+            self._set_incremental_busy(True)
+            logger.info("Starting incremental %s move", label)
             try:
                 await operation()
+                logger.info("Completed incremental %s move", label)
             except Exception as error:
                 if _is_recoverable_authority_error(error):
                     try:
@@ -948,7 +952,11 @@ class ControlPanel:
                     except Exception as retry_error:
                         error = retry_error
                 if _is_operator_stop_terminal(error):
-                    logger.info("Incremental %s move stopped by operator", label)
+                    logger.info(
+                        "Incremental %s move stopped at a confirmed safe terminal: %s",
+                        label,
+                        error,
+                    )
                     try:
                         await self.client.stop()
                         await self.client.reset()
@@ -969,6 +977,8 @@ class ControlPanel:
                             color="negative",
                             timeout=6000,
                         )
+            finally:
+                self._set_incremental_busy(False)
 
     async def _refresh_angles_best_effort(self) -> None:
         """Refresh the readout without turning a completed move into a failure."""
@@ -1208,16 +1218,40 @@ class ControlPanel:
         else:
             elem.classes(remove="cp-disabled-strong")
 
-    @staticmethod
-    def _jog_controls_available() -> bool:
+    def _jog_controls_available(self) -> bool:
         """Return whether direct jog controls may currently accept input."""
         status = waldoctl.commander.status
         return (
             not _read_only_mode()
+            and not getattr(self, "_incremental_busy", False)
             and not status.editing_mode
             and not is_any_program_running()
             and (status.simulator_active or status.connected)
         )
+
+    def _set_incremental_busy(self, busy: bool) -> None:
+        """Keep all jog buttons disabled until client-side terminal cleanup ends."""
+        self._incremental_busy = bool(busy)
+        self._last_joint_controls_available = None
+        self._last_cart_controls_available = None
+        if busy:
+            for button in getattr(self, "_joint_left_btns", {}).values():
+                self._set_strong_disabled(button, True)
+            for button in getattr(self, "_joint_right_btns", {}).values():
+                self._set_strong_disabled(button, True)
+            for element in getattr(self, "_cart_slot_elems", {}).values():
+                self._set_strong_disabled(element, True)
+            return
+        try:
+            if hasattr(self, "_joint_left_btns"):
+                self.refresh_joint_enablement()
+            if hasattr(self, "_cart_axis_imgs"):
+                self.sync_cartesian_button_states()
+        except (AttributeError, RuntimeError):
+            # Detached test doubles and a page being replaced during takeover
+            # have no live NiceGUI parent; the status loop will resync the
+            # active page on its next tick.
+            logger.debug("Deferred incremental-button enablement refresh")
 
     def refresh_joint_enablement(self) -> None:
         """Apply stronger disabled visuals to joint +/- buttons using
@@ -1333,9 +1367,16 @@ class ControlPanel:
 
     # ---- Movement permission check ----
 
-    @staticmethod
-    def _movement_allowed(notify: bool = True) -> bool:
+    def _movement_allowed(self, notify: bool = True) -> bool:
         """Return True if robot movement is permitted (simulator active or hardware connected, no script running)."""
+        if getattr(self, "_incremental_busy", False):
+            if notify:
+                ui.notify(
+                    "上一动作正在完成终态收尾，请等待运动按钮自动恢复。",
+                    color="info",
+                    timeout=1800,
+                )
+            return False
         if _read_only_mode():
             if notify:
                 ui.notify(
@@ -1820,6 +1861,7 @@ class ControlPanel:
 
     async def set_axis_pressed(self, axis: str, is_pressed: bool) -> None:
         """Hybrid click/hold for cartesian axes: click => single step, hold => stream."""
+        logger.info("Cartesian input axis=%s pressed=%s", axis, is_pressed)
         if waldoctl.commander.status.editing_mode:
             if is_pressed:
                 ui.notify(
@@ -1848,6 +1890,11 @@ class ControlPanel:
                     allowed = bool(lst[axis_idx])
         self._set_strong_disabled(self._cart_axis_imgs.get(axis), not allowed)
         if is_pressed and not allowed:
+            ui.notify(
+                f"{axis} 方向当前不可用。处理方法：请先反向移动、减小步长，或调整机械臂姿态后重试。",
+                color="warning",
+                timeout=4000,
+            )
             return
 
         self._apply_pressed_style(self._cart_axis_imgs.get(axis), bool(is_pressed))
@@ -1876,6 +1923,14 @@ class ControlPanel:
                 if axis_letter in _AXIS_MAP:
                     rel_pose[_AXIS_MAP[axis_letter]] = direction * step
                     frame = "TRF" if is_rotation else "WRF"
+                    logger.info(
+                        "Submitting Cartesian click axis=%s frame=%s step=%s speed=%s accel=%s",
+                        axis,
+                        frame,
+                        direction * step,
+                        speed,
+                        _norm_accel(),
+                    )
                     await self.client.move_l(
                         rel_pose,
                         frame=frame,
