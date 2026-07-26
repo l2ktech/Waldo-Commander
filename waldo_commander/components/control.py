@@ -2488,7 +2488,14 @@ class ControlPanel:
             return
         if self._fault_reset_action_lock.locked():
             return
-        async with self._fault_reset_action_lock:
+        if self._incremental_move_lock.locked():
+            ui.notify(
+                "动作仍在执行，请先等待完成或按急停，再进行恢复。",
+                color="warning",
+            )
+            return
+        async with self._fault_reset_action_lock, self._incremental_move_lock:
+            self._set_incremental_busy(True)
             if self._fault_reset_btn is not None:
                 self._fault_reset_btn.disable()
             try:
@@ -2503,6 +2510,7 @@ class ControlPanel:
                 ui.notify(operator_error("控制恢复", error), color="negative")
                 logger.warning("Operator fault reset failed: %s", error)
             finally:
+                self._set_incremental_busy(False)
                 if self._fault_reset_btn is not None:
                     self._fault_reset_btn.enable()
 

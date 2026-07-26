@@ -48,6 +48,42 @@ async def test_completed_incremental_move_ignores_optional_angle_refresh_failure
     await panel._refresh_angles_best_effort()
 
 
+@pytest.mark.asyncio
+async def test_fault_reset_holds_motion_lock_until_stop_and_reset_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    panel = object.__new__(control.ControlPanel)
+    panel._fault_reset_action_lock = asyncio.Lock()
+    panel._incremental_move_lock = asyncio.Lock()
+    panel._fault_reset_btn = None
+    panel._ui_client = None
+    stop_entered = asyncio.Event()
+    finish_stop = asyncio.Event()
+
+    async def stop() -> int:
+        stop_entered.set()
+        await finish_stop.wait()
+        return 1
+
+    async def reset() -> int:
+        return 1
+
+    panel.client = SimpleNamespace(stop=stop, reset=reset)
+    monkeypatch.setattr(control, "require_browser_control", lambda _cid: True)
+    monkeypatch.setattr(control.ui, "notify", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(control.waldoctl.commander.status.io, "estop", 1)
+
+    task = asyncio.create_task(panel.on_fault_reset_click())
+    await stop_entered.wait()
+
+    assert panel._incremental_move_lock.locked()
+    finish_stop.set()
+    await task
+    assert not panel._incremental_move_lock.locked()
+
+
 def test_confirmed_post_disable_settle_timeout_is_not_a_page_fault() -> None:
     error = RuntimeError(
         "motion terminal outcome=RESULT_UNKNOWN "
