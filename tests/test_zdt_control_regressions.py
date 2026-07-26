@@ -100,6 +100,32 @@ async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_zdt_hardware_home_routes_to_confirmed_parking(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    calls: list[str] = []
+    panel.confirm_parking_move = lambda: calls.append("parking")
+
+    monkeypatch.setattr(
+        type(control.ui_state.active_robot),
+        "backend_package",
+        property(lambda _self: "parol6_zdt_backend"),
+    )
+    monkeypatch.setattr(control.waldoctl.commander.status, "editing_mode", False)
+    monkeypatch.setattr(control.waldoctl.commander.status, "simulator_active", False)
+
+    await panel.send_home()
+
+    assert calls == ["parking"]
+
+
+def test_joint_direction_remains_available_for_partial_final_step() -> None:
+    assert control._joint_has_remaining_travel(-98.95, -101.25, "neg")
+    assert control._joint_has_remaining_travel(91.32, 81.21, "neg")
+    assert not control._joint_has_remaining_travel(-101.25, -101.25, "neg")
+    assert not control._joint_has_remaining_travel(228.87, 228.87, "pos")
+
+
 def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

@@ -111,21 +111,34 @@ _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 # Operator-confirmed physical standard parking pose captured after a manual
 # power-off placement and fresh six-axis readback on 2026-07-26.
 _ZDT_PARKING_JOINTS_DEG = (
-    -11.954649,
-    -98.948057,
-    91.321469,
-    -7.521031,
-    -17.275719,
-    81.891345,
+    0.0,
+    -130.0,
+    110.0,
+    0.0,
+    -37.0,
+    90.0,
 )
 _ZDT_JOINT_LIMITS_DEG = (
-    (-127.441406, 127.441406),
-    (-101.25, -2.0625),
-    (81.210937625, 228.86718770833332),
-    (-28.125, 28.125),
-    (-37.5, 23.203125),
-    (-2.8125, 182.8125),
+    (-117.4758195, 137.4069925),
+    (-136.2858026491228, -37.098302649122786),
+    (96.179468625, 243.83571870833333),
+    (-23.121469, 33.128531),
+    (-57.539281, 3.163844),
+    (7.174012142857137, 192.79901214285712),
 )
+
+
+def _joint_has_remaining_travel(
+    value_deg: float, limit_deg: float, direction: str
+) -> bool:
+    """Return whether any measurable travel remains toward a soft limit."""
+    if not math.isfinite(value_deg) or not math.isfinite(limit_deg):
+        return False
+    if direction == "neg":
+        return value_deg > limit_deg + 1e-6
+    if direction == "pos":
+        return value_deg < limit_deg - 1e-6
+    raise ValueError(f"unsupported joint direction: {direction}")
 
 # SVG icon transform lookup: (vb_width, vb_height) -> default transform
 _ICON_TRANSFORMS: dict[tuple[int, int], str] = {
@@ -2382,6 +2395,16 @@ class ControlPanel:
                 logger.info("HOME sent to editing robot")
             return
 
+        # The ZDT arm has no separate signed referencing sequence.  Its
+        # operator-confirmed parking pose is the canonical HOME target, so the
+        # page must not dispatch a different backend home coordinate.
+        if (
+            ui_state.active_robot.backend_package == "parol6_zdt_backend"
+            and not waldoctl.commander.status.simulator_active
+        ):
+            self.confirm_parking_move()
+            return
+
         if not _home_command_available():
             ui.notify(
                 "Home 尚未完成当前机械臂真机签收，已禁用。处理方法：请使用已确认的停车位按钮；完成 HOME receipt 后再由维护人员开放。",
@@ -2813,10 +2836,16 @@ class ControlPanel:
                             left_btn.mark(f"btn-j{idx + 1}-minus")
 
                             def check_lower_limit(a, i=idx, lo=lo):
-                                if len(a) <= i:
+                                if (
+                                    len(a) <= i
+                                    or not math.isfinite(a[i])
+                                ):
                                     return False
-                                step = waldoctl.commander.settings.jog.joint_step_deg
-                                return a[i] - step >= lo
+                                # The click handler already clips the target to
+                                # the soft limit. Keep the direction available
+                                # while any measurable travel remains, even when
+                                # it is smaller than the selected page step.
+                                return _joint_has_remaining_travel(a[i], lo, "neg")
 
                             left_btn.bind_enabled_from(
                                 waldoctl.commander.status.joints,
@@ -2845,10 +2874,12 @@ class ControlPanel:
                             right_btn.mark(f"btn-j{idx + 1}-plus")
 
                             def check_upper_limit(a, i=idx, hi=hi):
-                                if len(a) <= i:
+                                if (
+                                    len(a) <= i
+                                    or not math.isfinite(a[i])
+                                ):
                                     return False
-                                step = waldoctl.commander.settings.jog.joint_step_deg
-                                return a[i] + step <= hi
+                                return _joint_has_remaining_travel(a[i], hi, "pos")
 
                             right_btn.bind_enabled_from(
                                 waldoctl.commander.status.joints,
