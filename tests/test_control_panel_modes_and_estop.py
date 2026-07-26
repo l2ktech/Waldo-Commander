@@ -11,6 +11,24 @@ import pytest
 from nicegui.testing import User
 
 from tests.helpers.wait import wait_for_app_ready
+from waldo_commander.components.control import _home_command_available
+
+
+def test_zdt_hardware_home_requires_explicit_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WALDO_ZDT_HOME_ENABLED", raising=False)
+    assert not _home_command_available(
+        backend_package="parol6_zdt_backend", simulator_active=False
+    )
+    assert _home_command_available(
+        backend_package="parol6_zdt_backend", simulator_active=True
+    )
+
+    monkeypatch.setenv("WALDO_ZDT_HOME_ENABLED", "1")
+    assert _home_command_available(
+        backend_package="parol6_zdt_backend", simulator_active=False
+    )
 
 
 @pytest.mark.integration

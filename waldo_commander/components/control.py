@@ -58,6 +58,28 @@ def _read_only_mode() -> bool:
     }
 
 
+def _home_command_available(
+    *,
+    backend_package: str | None = None,
+    simulator_active: bool | None = None,
+) -> bool:
+    """Keep unsigned ZDT hardware HOME unavailable while preserving simulation."""
+    package = backend_package or ui_state.active_robot.backend_package
+    simulated = (
+        waldoctl.commander.status.simulator_active
+        if simulator_active is None
+        else bool(simulator_active)
+    )
+    if package != "parol6_zdt_backend" or simulated:
+        return True
+    return os.environ.get("WALDO_ZDT_HOME_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _is_recoverable_authority_error(error: BaseException) -> bool:
     normalized = str(error).lower()
     return any(
@@ -2256,6 +2278,14 @@ class ControlPanel:
                 logger.info("HOME sent to editing robot")
             return
 
+        if not _home_command_available():
+            ui.notify(
+                "Home 尚未完成当前机械臂真机签收，已禁用。处理方法：请使用已确认的停车位按钮；完成 HOME receipt 后再由维护人员开放。",
+                color="warning",
+                timeout=7000,
+            )
+            return
+
         if not self._movement_allowed():
             return
 
@@ -3074,9 +3104,16 @@ class ControlPanel:
     def _build_action_row(self) -> None:
         """Build the action row: Home, Robot/Sim toggle, gizmo controls, camera reset, step input."""
         with ui.row().classes("gap-2 items-center w-full flex-wrap"):
-            ui.button(icon="home", on_click=self.send_home).props(
+            home_btn = ui.button(icon="home", on_click=self.send_home).props(
                 "dense round unelevated color=teal-6"
-            ).tooltip("Home (H)").mark("btn-home")
+            )
+            if _home_command_available():
+                home_btn.tooltip("Home (H)")
+            else:
+                home_btn.props("disable").tooltip(
+                    "Home 尚未完成真机签收；请使用旁边已确认的停车位按钮"
+                )
+            home_btn.mark("btn-home")
 
             ui.button(icon="garage", on_click=self.confirm_parking_move).props(
                 "dense round unelevated color=blue-grey-6"
