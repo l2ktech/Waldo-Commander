@@ -668,6 +668,10 @@ class GripperPage:
     def cleanup(self) -> None:
         """Remove listeners when panel is destroyed."""
         if self._status_refresh_timer is not None:
-            self._status_refresh_timer.cancel()
+            try:
+                self._status_refresh_timer.cancel(with_current_invocation=True)
+            except TypeError:
+                self._status_refresh_timer.cancel()
+            self._status_refresh_timer = None
         if self._current_range_listener is not None:
             robot_state.remove_change_listener(self._current_range_listener)
