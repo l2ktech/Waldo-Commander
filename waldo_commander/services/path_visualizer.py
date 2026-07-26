@@ -438,7 +438,7 @@ def _run_simulation_isolated(
         from waldo_commander.profiles import get_robot
 
         _mark_colliding_segments(
-            get_robot(backend_package),
+            get_robot(robot_backend),
             local_segments,
             local_tool_selections,
             local_shape_changes,

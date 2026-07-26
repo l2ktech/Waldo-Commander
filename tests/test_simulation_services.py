@@ -857,6 +857,22 @@ rbt.home()
         if result["final_joints_rad"] is not None:
             assert len(result["final_joints_rad"]) == 6
 
+    def test_zdt_backend_package_uses_profile_id_for_collision_marking(self, caplog):
+        """The import package name must not be passed to the profile registry."""
+        from waldo_commander.services.path_visualizer import _run_simulation_isolated
+
+        robot = get_robot("parol6_zdt")
+        dry_run_client = robot.create_dry_run_client()
+        assert dry_run_client is not None
+        result = _run_simulation_isolated(
+            "from parol6_zdt_backend import RobotClient\nrbt = RobotClient()\n",
+            backend_package="parol6_zdt_backend",
+            dry_run_client_cls=type(dry_run_client),
+        )
+
+        assert result["error"] is None
+        assert "Robot backend 'parol6_zdt_backend' not found" not in caplog.text
+
 
 class TestPathVisualizerIntegration:
     """Integration tests for PathVisualizer with dry run client.
