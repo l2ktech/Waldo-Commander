@@ -31,6 +31,37 @@ from waldo_commander.services.control_lease import (
 from waldo_commander.state import ui_state
 
 
+@pytest.mark.asyncio
+async def test_take_control_uses_clicking_page_not_stale_global_active_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from waldo_commander.components.control import ControlPanel
+    import waldo_commander.components.control as control_module
+
+    panel = object.__new__(ControlPanel)
+    panel._ui_client = SimpleNamespace(id="clicking-browser")
+    panel.refresh_control_indicator = lambda: None
+
+    async def stop() -> int:
+        return 1
+
+    monkeypatch.setattr(
+        control_module.waldoctl.commander, "client", SimpleNamespace(stop=stop)
+    )
+    monkeypatch.setattr(control_module.ui, "notify", lambda *_args, **_kwargs: None)
+    ui_state.active_client_id = "different-active-browser"
+    control_lease.seize(BROWSER, "different-active-browser", "Browser")
+
+    await panel._take_control()
+
+    assert ui_state.active_client_id == "clicking-browser"
+    assert control_lease._holder is not None
+    assert control_lease._holder.channel == BROWSER
+    assert control_lease._holder.id == "clicking-browser"
+
+
 # --------------------------------------------------------------------------
 # State machine (no app)
 # --------------------------------------------------------------------------

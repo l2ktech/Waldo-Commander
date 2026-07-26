@@ -1557,9 +1557,15 @@ class ControlPanel:
         """Hard reclaim: seize the lease for this browser tab and stop any
         motion the AI started — the robot stays enabled so the human can
         drive immediately."""
-        cid = ui_state.active_client_id
+        # Bind the action to the page that owns this button.  Using the
+        # process-global active_client_id makes a displaced/older page seize
+        # control on behalf of whichever page replaced it, so the button can
+        # remain visible forever and a later motion is stopped by the wrong
+        # browser session.
+        cid = getattr(self._ui_client, "id", None)
         if cid is None:
             return
+        ui_state.active_client_id = cid
         control_lease.seize(BROWSER, cid, "Browser")
         try:
             await waldoctl.commander.client.stop()
