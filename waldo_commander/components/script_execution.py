@@ -180,15 +180,28 @@ class ScriptExecutionController:
             return
 
         try:
+            # Program is the process-global editor truth.  ``ui_state`` widget
+            # references are page-local and can point at an older browser page
+            # after a refresh or a second viewer connects.  Reading execution
+            # source from those stale widgets makes the visible active tab run
+            # an old ``untitled.py`` buffer.  Keep widget reads only as a
+            # compatibility fallback for tests/pages without a Program model.
+            launching_tab = waldoctl.commander.programs.active
             filename_input = ui_state.active_filename_input
             filename = (
-                filename_input.value.strip() if filename_input else ""
+                launching_tab.filename.strip()
+                if launching_tab is not None
+                else filename_input.value.strip() if filename_input else ""
             ) or "program.py"
             if not filename.endswith(".py"):
                 filename += ".py"
 
             textarea = ui_state.active_textarea
-            content = textarea.value if textarea else ""
+            content = (
+                launching_tab.source
+                if launching_tab is not None
+                else textarea.value if textarea else ""
+            )
             assert self._program_dir is not None, "program_dir not set"
             runtime_dir = self._program_dir / ".runtime"
             script_path = runtime_dir / filename
@@ -200,7 +213,6 @@ class ScriptExecutionController:
 
             # Remember the launching tab so output is appended to its log
             # even after the user switches tabs while the script runs.
-            launching_tab = waldoctl.commander.programs.active
             self._script_tab_id = launching_tab.id if launching_tab else None
             if launching_tab is not None:
                 launching_tab.log.clear()

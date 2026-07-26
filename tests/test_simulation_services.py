@@ -1462,6 +1462,8 @@ class TestScriptExecutionLifecycle:
         # Long-running script: only `stop_script` (i.e. our cleanup path) can end it.
         script_path = tmp_path / "long_running.py"
         script_path.write_text("import time\nwhile True:\n    time.sleep(0.1)\n")
+        active_program.filename = script_path.name
+        active_program.source = script_path.read_text()
 
         # Capture the real handle as it's returned by run_script so we can verify
         # the subprocess gets reaped.
@@ -1495,9 +1497,9 @@ class TestScriptExecutionLifecycle:
 
         # Provide the active-tab widget refs start() reads from.
         fake_textarea = MagicMock()
-        fake_textarea.value = script_path.read_text()
+        fake_textarea.value = "print('stale page widget')\n"
         fake_filename_input = MagicMock()
-        fake_filename_input.value = script_path.name
+        fake_filename_input.value = "stale-page.py"
         ui_state.active_textarea = fake_textarea
         ui_state.active_filename_input = fake_filename_input
 
@@ -1550,6 +1552,11 @@ class TestScriptExecutionLifecycle:
         only ``.runtime`` was created, not ``.runtime/sub``.
         """
         from waldo_commander.components import script_execution as se
+        from tests.helpers.programs import ensure_active_program
+
+        active_program = ensure_active_program()
+        active_program.filename = "sub/regression.py"
+        active_program.source = "# subdir regression\n"
 
         # Stub run_script so we don't actually launch a subprocess — the bug
         # is in the file write that happens before run_script is called.
@@ -1563,9 +1570,9 @@ class TestScriptExecutionLifecycle:
         monkeypatch.setattr(se.log_panel, "expand", lambda: None)
 
         fake_textarea = MagicMock()
-        fake_textarea.value = "# subdir regression\n"
+        fake_textarea.value = "# stale page widget\n"
         fake_filename_input = MagicMock()
-        fake_filename_input.value = "sub/regression.py"
+        fake_filename_input.value = "stale.py"
         ui_state.active_textarea = fake_textarea
         ui_state.active_filename_input = fake_filename_input
 
