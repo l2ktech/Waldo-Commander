@@ -1418,15 +1418,29 @@ class TestScriptExecutionLifecycle:
     def test_completion_failure_message_is_actionable_chinese(self):
         from waldo_commander.components.script_execution import (
             _completion_failure_message,
+            _program_stderr_text,
         )
+        from waldoctl import LogEntry, Program
 
         syntax = _completion_failure_message("SyntaxError: invalid syntax", 1)
         runtime = _completion_failure_message("ValueError: bad value", 1)
+        program = Program(
+            id="failure-log",
+            filename="failure.py",
+            file_path=None,
+            source="",
+            _saved_source="",
+        )
+        program.log.append(LogEntry(timestamp=0, stream="stdout", text="before"))
+        program.log.append(
+            LogEntry(timestamp=1, stream="stderr", text="SyntaxError: invalid syntax")
+        )
 
         assert "Python 语法或缩进错误" in syntax
         assert "处理方法" in syntax
         assert "运行时异常" in runtime
         assert "处理方法" in runtime
+        assert _program_stderr_text(program) == "SyntaxError: invalid syntax"
 
     @pytest.mark.asyncio
     async def test_start_reaps_subprocess_on_late_exception(

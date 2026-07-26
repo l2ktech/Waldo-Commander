@@ -61,6 +61,14 @@ def _completion_failure_message(stderr_text: str, return_code: int) -> str:
     )
 
 
+def _program_stderr_text(program) -> str:
+    if program is None:
+        return ""
+    return "\n".join(
+        entry.text for entry in program.log.entries if entry.stream == "stderr"
+    )
+
+
 class ScriptExecutionController:
     """Owns the script subprocess lifecycle and GUI step controller.
 
@@ -371,13 +379,10 @@ class ScriptExecutionController:
                 with ui_client:
                     if rc != 0:
                         running_tab = self._launching_program()
-                        stderr_text = "\n".join(
-                            entry.text
-                            for entry in (running_tab.log if running_tab else [])
-                            if entry.stream == "stderr"
-                        )
                         ui.notify(
-                            _completion_failure_message(stderr_text, rc),
+                            _completion_failure_message(
+                                _program_stderr_text(running_tab), rc
+                            ),
                             color="negative",
                             timeout=8000,
                         )
