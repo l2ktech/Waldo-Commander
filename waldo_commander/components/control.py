@@ -108,13 +108,22 @@ _AXIS_ORDER = (
 )
 _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 
-_ZDT_PARKING_JOINTS_DEG = (-11.96, -148.42, 115.35, -30.11, -69.10, 81.89)
+# Operator-confirmed physical standard parking pose captured after a manual
+# power-off placement and fresh six-axis readback on 2026-07-26.
+_ZDT_PARKING_JOINTS_DEG = (
+    -11.954649,
+    -98.948057,
+    91.321469,
+    -7.521031,
+    -17.275719,
+    81.891345,
+)
 _ZDT_JOINT_LIMITS_DEG = (
     (-127.441406, 127.441406),
-    (-151.875, -3.09375),
-    (102.582237, 289.095395),
-    (-112.5, 112.5),
-    (-150.0, 92.8125),
+    (-101.25, -2.0625),
+    (81.210937625, 228.86718770833332),
+    (-28.125, 28.125),
+    (-37.5, 23.203125),
     (-2.8125, 182.8125),
 )
 
@@ -766,7 +775,6 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
         )
         or (
             "OPERATOR_STOP_CONFIRMED" in message
-            and ("CANCELLED" in message or "CONFIRMED_STOPPED" in message)
         )
     )
 
@@ -991,15 +999,19 @@ class ControlPanel:
                         label,
                         error,
                     )
-                    try:
-                        await self.client.stop()
-                        await self.client.reset()
-                    except Exception as reset_error:
-                        logger.warning(
-                            "Safe stopped incremental %s move could not auto-reset: %s",
-                            label,
-                            reset_error,
-                        )
+                    # A deliberate E-STOP remains latched until the operator
+                    # presses the dialog reset button. Other confirmed terminal
+                    # cleanup misses may be recovered automatically.
+                    if "OPERATOR_STOP_CONFIRMED" not in str(error):
+                        try:
+                            await self.client.stop()
+                            await self.client.reset()
+                        except Exception as reset_error:
+                            logger.warning(
+                                "Safe stopped incremental %s move could not auto-reset: %s",
+                                label,
+                                reset_error,
+                            )
                     return
                 benign_message = _benign_motion_rejection(error)
                 if benign_message is not None:
@@ -1033,7 +1045,20 @@ class ControlPanel:
     async def _refresh_angles_best_effort(self) -> None:
         """Refresh the readout without turning a completed move into a failure."""
         try:
-            await self.client.angles()
+            angles = await self.client.angles()
+            if (
+                angles is not None
+                and len(angles) >= self._n_joints
+                and all(math.isfinite(float(value)) for value in angles[: self._n_joints])
+            ):
+                waldoctl.commander.status.joints.angles.set_deg(
+                    np.asarray(angles[: self._n_joints], dtype=np.float64)
+                )
+                # Keep the motion buttons busy through one 50 Hz render tick so
+                # the operator sees the new angle before another click is accepted.
+                await asyncio.sleep(
+                    1.0 / max(1.0, float(config.webapp_control_rate_hz))
+                )
         except Exception as error:
             logger.debug("Post-move angle refresh deferred to status stream: %s", error)
 

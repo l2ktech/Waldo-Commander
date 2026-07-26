@@ -1,11 +1,69 @@
 """Configuration dataclasses for UrdfScene."""
 
+import json
+import math
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Sequence
 
 from waldo_commander.common.theme import SceneColors
+
+
+def _angle_offsets_path() -> Path:
+    """Resolve the machine-local visual calibration path at call time."""
+    return Path(
+        os.environ.get(
+            "WALDO_URDF_ANGLE_OFFSETS_PATH",
+            "/var/lib/parol6-zdt/waldo/urdf-angle-offsets.json",
+        )
+    ).expanduser()
+
+
+def load_angle_offsets(defaults: list[float]) -> list[float]:
+    """Load visual-only URDF offsets, falling back to installed defaults."""
+    try:
+        payload = json.loads(_angle_offsets_path().read_text(encoding="utf-8"))
+        values = payload.get("angle_offsets_deg")
+        if (
+            payload.get("schema") != "waldo-urdf-angle-offsets-v1"
+            or not isinstance(values, list)
+            or len(values) != len(defaults)
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                for value in values
+            )
+        ):
+            return list(defaults)
+        return [float(value) for value in values]
+    except (OSError, ValueError, TypeError):
+        return list(defaults)
+
+
+def save_angle_offsets(values: list[float]) -> None:
+    """Persist visual-only offsets without changing robot calibration."""
+    normalized = [float(value) for value in values]
+    if len(normalized) != 6 or any(not math.isfinite(value) for value in normalized):
+        raise ValueError("visual angle offsets must contain six finite values")
+    angle_offsets_path = _angle_offsets_path()
+    angle_offsets_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = angle_offsets_path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema": "waldo-urdf-angle-offsets-v1",
+                "angle_offsets_deg": normalized,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(angle_offsets_path)
 
 
 class RobotAppearanceMode(Enum):

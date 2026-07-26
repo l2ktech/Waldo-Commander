@@ -26,7 +26,8 @@ from waldo_commander.state import (
     ui_state,
 )
 
-from .config import RobotAppearanceMode
+from .angle_pipeline import reset_config as reset_angle_pipeline_config
+from .config import RobotAppearanceMode, save_angle_offsets
 from .ik_solver import EditingIKSolver
 from .loader import normalize_axis
 
@@ -107,6 +108,7 @@ class EditingMixin:
         self._edit_bar_container: Any | None = None
         self._current_editing_type: str | None = None
         self._pose_alignment_mode: bool = False
+        self._pose_alignment_controller_deg: list[float] | None = None
 
         self._cached_joint_axes_letters: list[str] | None = None
 
@@ -146,8 +148,21 @@ class EditingMixin:
         if self._editing_unified_target:
             return
 
-        initial_angles = self._get_robot_angles_rad()
+        controller_deg = list(
+            waldoctl.commander.status.joints.angles.deg[: len(self.joint_names)]
+        )
+        visual_deg = [
+            sign * angle + offset
+            for sign, angle, offset in zip(
+                self.config.angle_signs,
+                controller_deg,
+                self.config.angle_offsets,
+                strict=True,
+            )
+        ]
+        initial_angles = [math.radians(value) for value in visual_deg]
         self._pose_alignment_mode = True
+        self._pose_alignment_controller_deg = controller_deg
         self._editing_unified_target = True
         self._editing_target_id = None
         self._unified_target_mode = "joint"
@@ -558,6 +573,7 @@ class EditingMixin:
         self._original_editing_joints = None
         self._original_editing_pose = None
         self._pose_alignment_mode = False
+        self._pose_alignment_controller_deg = None
         self._cleanup_editing()
         self._hide_edit_bar()
         self.exit_editing_mode()
@@ -700,31 +716,37 @@ class EditingMixin:
         if not self._editing_unified_target:
             return
         if self._pose_alignment_mode:
-            angles = list(
+            visual_angles = list(
                 waldoctl.commander.status.joints.angles.deg[: len(self.joint_names)]
             )
-            text = ", ".join(
-                f"J{i + 1}={angle:.2f}°" for i, angle in enumerate(angles)
+            controller_angles = self._pose_alignment_controller_deg
+            if controller_angles is None:
+                return
+            offsets = [
+                visual - sign * controller
+                for visual, sign, controller in zip(
+                    visual_angles,
+                    self.config.angle_signs,
+                    controller_angles,
+                    strict=True,
+                )
+            ]
+            save_angle_offsets(offsets)
+            self.config.angle_offsets[:] = offsets
+            reset_angle_pipeline_config()
+            self._pre_edit_angles = [math.radians(value) for value in visual_angles]
+            waldoctl.commander.status.joints.angles.set_deg(
+                np.asarray(controller_angles, dtype=np.float64)
             )
-            if self._edit_bar_label is not None:
-                self._edit_bar_label.text = "人工姿态已保留（点击红叉恢复实时姿态）"
-            dialog = ui.dialog()
-            with dialog, ui.card().classes("min-w-[520px]"):
-                ui.label("人工姿态估算结果").classes("text-lg font-medium")
-                ui.label(text).classes("font-mono")
-                ui.label(
-                    "3D模型将保持当前人工姿态。点击底部红叉后恢复编码器实时姿态；"
-                    "该结果不会写入硬件零点，也不能替代输出侧编码器。"
-                ).classes("text-sm text-gray-400")
-                with ui.row().classes("justify-end w-full"):
-                    ui.button(
-                        "复制角度",
-                        on_click=lambda: ui.run_javascript(
-                            f"navigator.clipboard.writeText({text!r})"
-                        ),
-                    )
-                    ui.button("关闭", on_click=dialog.close).props("flat")
-            dialog.open()
+            text = ", ".join(
+                f"J{i + 1}={angle:.2f}°"
+                for i, angle in enumerate(visual_angles)
+            )
+            self._end_editing_session()
+            ui.notify(
+                f"3D模型姿态已保存：{text}。仅修改页面视觉偏移，不写硬件零点。",
+                color="positive",
+            )
             return
         if self._unified_target_mode == "joint":
             self._confirm_unified_as_joint()

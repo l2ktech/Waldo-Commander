@@ -83,7 +83,14 @@ async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
     ]
 
 
-def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
+def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv(
+        "WALDO_URDF_ANGLE_OFFSETS_PATH",
+        str(tmp_path / "missing-machine-offsets.json"),
+    )
     assert commander_main._urdf_angle_signs("parol6_zdt_backend") == [
         -1,
         1,
@@ -93,14 +100,7 @@ def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene() -> None:
         1,
     ]
     assert commander_main._urdf_angle_signs("parol6") == [1] * 6
-    assert commander_main._urdf_angle_offsets("parol6_zdt_backend") == [
-        -9.0,
-        0.0,
-        -10.0,
-        30.0,
-        45.0,
-        15.0,
-    ]
+    assert commander_main._urdf_angle_offsets("parol6_zdt_backend") == [0.0] * 6
     assert commander_main._urdf_angle_offsets("parol6") == [0.0] * 6
 
 

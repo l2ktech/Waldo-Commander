@@ -70,6 +70,7 @@ from waldo_commander.services.urdf_scene import (
     reset_angle_pipeline,
     update_urdf_angles,
 )
+from waldo_commander.services.urdf_scene.config import load_angle_offsets
 from waldo_commander.mcp import start_mcp_server, stop_mcp_server
 from waldo_commander.services.urdf_scene.scene_handle import WcSceneHandle
 from waldo_commander.services.action_log import action_log_service
@@ -103,7 +104,11 @@ def _urdf_angle_signs(backend_package: str) -> list[int]:
 def _urdf_angle_offsets(backend_package: str) -> list[float]:
     """Visual-only assembly zero offsets; hardware coordinates stay untouched."""
     if backend_package == "parol6_zdt_backend":
-        return [-9.0, 0.0, -10.0, 30.0, 45.0, 15.0]
+        # Calibrated ZDT status angles are already expressed in robot-joint
+        # coordinates.  A machine-specific visual alignment may still be
+        # loaded from disk, but stale parking-pose estimates must never become
+        # the installed default because they distort every later live pose.
+        return load_angle_offsets([0.0] * 6)
     return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 STATIC_DIR = pkg_files("waldo_commander").joinpath("static")

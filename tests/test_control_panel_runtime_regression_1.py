@@ -39,6 +39,7 @@ async def test_jog_timers_are_created_once_before_controls_are_used(
 @pytest.mark.asyncio
 async def test_completed_incremental_move_ignores_optional_angle_refresh_failure() -> None:
     panel = object.__new__(control.ControlPanel)
+    panel._n_joints = 6
 
     async def angles():
         raise RuntimeError("IPC client transport is not open")
@@ -46,6 +47,35 @@ async def test_completed_incremental_move_ignores_optional_angle_refresh_failure
     panel.client = SimpleNamespace(angles=angles)
 
     await panel._refresh_angles_best_effort()
+
+
+@pytest.mark.asyncio
+async def test_completed_incremental_move_publishes_fresh_angles_before_unlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._n_joints = 6
+    expected = [-12.0, -99.0, 91.3, -7.5, -17.2, 61.8]
+
+    async def angles():
+        return expected
+
+    published: list[list[float]] = []
+    panel.client = SimpleNamespace(angles=angles)
+    monkeypatch.setattr(
+        control.waldoctl.commander,
+        "status",
+        SimpleNamespace(
+            joints=SimpleNamespace(
+                angles=SimpleNamespace(
+                    set_deg=lambda values: published.append(values.tolist())
+                )
+            )
+        ),
+    )
+    await panel._refresh_angles_best_effort()
+
+    assert published == [expected]
 
 
 @pytest.mark.asyncio
@@ -92,6 +122,51 @@ def test_confirmed_post_disable_settle_timeout_is_not_a_page_fault() -> None:
     )
 
     assert control._is_operator_stop_terminal(error) is True
+
+
+def test_simplified_operator_stop_terminal_is_not_a_page_fault() -> None:
+    error = RuntimeError(
+        "OPERATOR_STOP_CONFIRMED: operator STOP confirmed before target completion"
+    )
+
+    assert control._is_operator_stop_terminal(error) is True
+
+
+@pytest.mark.asyncio
+async def test_operator_estop_remains_latched_without_red_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._incremental_move_lock = __import__("asyncio").Lock()
+    panel._ui_client = None
+    calls: list[str] = []
+
+    async def stop() -> int:
+        calls.append("stop")
+        return 1
+
+    async def reset() -> int:
+        calls.append("reset")
+        return 1
+
+    panel.client = SimpleNamespace(stop=stop, reset=reset)
+
+    async def operation() -> None:
+        raise RuntimeError(
+            "OPERATOR_STOP_CONFIRMED: operator STOP confirmed before target completion"
+        )
+
+    notifications: list[str] = []
+    monkeypatch.setattr(
+        control.ui,
+        "notify",
+        lambda message, **_kwargs: notifications.append(message),
+    )
+
+    await panel._run_incremental_move("joint", operation)
+
+    assert calls == []
+    assert notifications == []
 
 
 @pytest.mark.asyncio
