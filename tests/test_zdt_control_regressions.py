@@ -126,6 +126,21 @@ def test_joint_direction_remains_available_for_partial_final_step() -> None:
     assert not control._joint_has_remaining_travel(228.87, 228.87, "pos")
 
 
+def test_joint_commands_keep_braking_margin_from_soft_limits() -> None:
+    assert control._joint_command_bounds(-10.0, 10.0) == (-9.5, 9.5)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "J2 soft limit was crossed",
+        "OFFICIAL_TRAJECTORY_INVALID: Joint 2 target is out of range",
+    ],
+)
+def test_soft_limit_rejections_are_normal_boundaries(detail: str) -> None:
+    assert control._benign_motion_rejection(RuntimeError(detail)) is not None
+
+
 def test_zdt_urdf_base_visual_direction_is_reversed_only_in_the_scene(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

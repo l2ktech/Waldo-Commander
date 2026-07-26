@@ -120,12 +120,19 @@ _ZDT_PARKING_JOINTS_DEG = (
 )
 _ZDT_JOINT_LIMITS_DEG = (
     (-117.4758195, 137.4069925),
-    (-136.2858026491228, -37.098302649122786),
+    (-137.0, -37.098302649122786),
     (96.179468625, 243.83571870833333),
     (-23.121469, 33.128531),
     (-57.539281, 3.163844),
     (7.174012142857137, 192.79901214285712),
 )
+_JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5
+
+
+def _joint_command_bounds(lo: float, hi: float) -> tuple[float, float]:
+    """Keep commanded targets away from physical soft-limit boundaries."""
+    margin = min(_JOINT_LIMIT_COMMAND_MARGIN_DEG, max(0.0, (hi - lo) / 4.0))
+    return lo + margin, hi - margin
 
 
 def _joint_has_remaining_travel(
@@ -794,7 +801,7 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
 
 def _benign_motion_rejection(error: BaseException) -> str | None:
     """Translate normal workspace boundaries into non-fault UI feedback."""
-    message = str(error).upper()
+    message = str(error).upper().replace(" ", "_").replace("-", "_")
     if "SELF_COLLISION" in message or "COLLISION" in message:
         return "该方向已因预测碰撞停止，机械臂保持安全。请反向移动或调整姿态。"
     if "SOFT_LIMIT" in message or "JOINT_LIMIT" in message or "OUT_OF_RANGE" in message:
@@ -1834,6 +1841,18 @@ class ControlPanel:
         values = joints.can_jog_pos if direction == "pos" else joints.can_jog_neg
         return 0 <= joint_index < len(values) and bool(values[joint_index])
 
+    def _joint_input_direction_available(
+        self, joint_index: int, direction: str
+    ) -> bool:
+        if not self._joint_direction_available(joint_index, direction):
+            return False
+        angles = waldoctl.commander.status.joints.angles.deg
+        if not 0 <= joint_index < len(angles):
+            return False
+        lo, hi = _joint_command_bounds(*self._get_joint_limits(joint_index))
+        value = float(angles[joint_index])
+        return value < hi if direction == "pos" else value > lo
+
     async def set_joint_pressed(self, j: int, direction: str, is_pressed: bool) -> None:
         """Hybrid click/hold: quick click => single step, press-and-hold => stream until release."""
         if waldoctl.commander.status.editing_mode:
@@ -1845,7 +1864,7 @@ class ControlPanel:
             return
         if not self._movement_allowed(notify=is_pressed):
             return
-        if is_pressed and not self._joint_direction_available(j, direction):
+        if is_pressed and not self._joint_input_direction_available(j, direction):
             target = (
                 self._joint_right_btns.get(j)
                 if direction == "pos"
@@ -1905,7 +1924,7 @@ class ControlPanel:
                 angles = list(waldoctl.commander.status.joints.angles.deg)
                 if len(angles) >= self._n_joints:
                     target_angles = angles[: self._n_joints]
-                    lo, hi = self._get_joint_limits(j)
+                    lo, hi = _joint_command_bounds(*self._get_joint_limits(j))
                     if direction == "pos":
                         target_angles[j] = min(hi, target_angles[j] + step)
                     else:
@@ -1950,7 +1969,7 @@ class ControlPanel:
             intent = self._get_first_pressed_joint()
             if intent is not None:
                 j, d = intent
-                if not self._joint_direction_available(j, d):
+                if not self._joint_input_direction_available(j, d):
                     if d == "pos":
                         self._jog_pressed_pos[j] = False
                     else:
@@ -2293,7 +2312,7 @@ class ControlPanel:
             if not self._movement_allowed():
                 return
             angles = list(waldoctl.commander.status.joints.angles.deg)
-            lo, hi = self._get_joint_limits(joint_index)
+            lo, hi = _joint_command_bounds(*self._get_joint_limits(joint_index))
             tgt = max(lo, min(hi, float(target_deg)))
             pose = angles[: self._n_joints]
             pose[joint_index] = tgt
@@ -2318,7 +2337,7 @@ class ControlPanel:
             if not self._movement_allowed():
                 return
             angles = list(waldoctl.commander.status.joints.angles.deg)
-            lo, hi = self._get_joint_limits(joint_index)
+            lo, hi = _joint_command_bounds(*self._get_joint_limits(joint_index))
             final_target = float(lo if which == "min" else hi)
             spd = _norm_speed()
             for current in _joint_limit_waypoints(
@@ -2835,7 +2854,7 @@ class ControlPanel:
                             )
                             left_btn.mark(f"btn-j{idx + 1}-minus")
 
-                            def check_lower_limit(a, i=idx, lo=lo):
+                            def check_lower_limit(a, i=idx, lo=lo, hi=hi):
                                 if (
                                     len(a) <= i
                                     or not math.isfinite(a[i])
@@ -2845,7 +2864,8 @@ class ControlPanel:
                                 # the soft limit. Keep the direction available
                                 # while any measurable travel remains, even when
                                 # it is smaller than the selected page step.
-                                return _joint_has_remaining_travel(a[i], lo, "neg")
+                                safe_lo, _safe_hi = _joint_command_bounds(lo, hi)
+                                return _joint_has_remaining_travel(a[i], safe_lo, "neg")
 
                             left_btn.bind_enabled_from(
                                 waldoctl.commander.status.joints,
@@ -2873,13 +2893,14 @@ class ControlPanel:
                             )
                             right_btn.mark(f"btn-j{idx + 1}-plus")
 
-                            def check_upper_limit(a, i=idx, hi=hi):
+                            def check_upper_limit(a, i=idx, lo=lo, hi=hi):
                                 if (
                                     len(a) <= i
                                     or not math.isfinite(a[i])
                                 ):
                                     return False
-                                return _joint_has_remaining_travel(a[i], hi, "pos")
+                                _safe_lo, safe_hi = _joint_command_bounds(lo, hi)
+                                return _joint_has_remaining_travel(a[i], safe_hi, "pos")
 
                             right_btn.bind_enabled_from(
                                 waldoctl.commander.status.joints,
