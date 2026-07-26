@@ -52,6 +52,23 @@ def test_zdt_speed_rating_spans_the_encodable_range() -> None:
     assert control._normalized_speed(100, "parol6_zdt_backend") == pytest.approx(1.0)
 
 
+def test_cartesian_axis_lookup_uses_selected_reference_frames(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    panel._translation_frame = "TRF"
+    panel._rotation_frame = "WRF"
+    panel._cart_axis_lookup = None
+    monkeypatch.setattr(
+        control.ui_state,
+        "robot",
+        SimpleNamespace(cartesian_frames=["WRF", "TRF"]),
+    )
+
+    lookup = panel._get_cart_axis_lookup()
+
+    assert lookup["X+"] == ("X", 1.0, "TRF")
+    assert lookup["RZ-"] == ("RZ", -1.0, "WRF")
+
+
 @pytest.mark.asyncio
 async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
     calls: list[tuple[list[float], dict[str, object]]] = []

@@ -29,6 +29,26 @@ def test_zdt_backend_uses_fixed_socketcan_connection(monkeypatch) -> None:
     assert SettingsContent._active_backend_name() == "parol6_zdt"
 
 
+def test_reference_frame_selection_calls_control_panel(monkeypatch) -> None:
+    from waldo_commander.components.settings import SettingsContent
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("waldo_commander.components.settings.ui.notify", lambda *_a, **_k: None)
+    settings = SettingsContent(
+        SimpleNamespace(),
+        translation_frame="WRF",
+        rotation_frame="TRF",
+        on_reference_frames_changed=lambda translation, rotation: calls.append(
+            (translation, rotation)
+        ),
+    )
+
+    settings._set_reference_frame(translation="TRF")
+    settings._set_reference_frame(rotation="WRF")
+
+    assert calls == [("TRF", "TRF"), ("TRF", "WRF")]
+
+
 @pytest.mark.integration
 async def test_settings_tab_accessible(user: User) -> None:
     """Test that Settings tab is accessible in the control panel.

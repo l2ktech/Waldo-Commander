@@ -62,8 +62,18 @@ def _setting_row(title: str, description: str):
 class SettingsContent:
     """Settings content that can be embedded in the control panel."""
 
-    def __init__(self, client: RobotClient) -> None:
+    def __init__(
+        self,
+        client: RobotClient,
+        *,
+        translation_frame: str = "WRF",
+        rotation_frame: str = "TRF",
+        on_reference_frames_changed: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.client = client
+        self._translation_frame = translation_frame
+        self._rotation_frame = rotation_frame
+        self._on_reference_frames_changed = on_reference_frames_changed
         self._port_select: ui.select | None = None
         self._refresh_timer: ui.timer | None = None
         self._cam_select: ui.select | None = None
@@ -701,24 +711,45 @@ class SettingsContent:
 
     def _build_reference_frames(self) -> None:
         with _setting_row("Translation RF", "Reference frame for translation moves"):
-            with ui.element("span").tooltip(
-                "Mode is currently locked but will be configurable in a future update"
-            ):
-                ui.select(
-                    options={"WRF": "World", "TRF": "Tool"},
-                    value="WRF",
-                ).classes("w-24").props("dense disable")
+            ui.select(
+                options={"WRF": "World", "TRF": "Tool"},
+                value=self._translation_frame,
+                on_change=lambda event: self._set_reference_frame(
+                    translation=str(event.value)
+                ),
+            ).classes("w-24").props("dense").mark("select-translation-frame")
 
         ui.separator().classes("my-1")
 
         with _setting_row("Rotation RF", "Reference frame for rotation moves"):
-            with ui.element("span").tooltip(
-                "Mode is currently locked but will be configurable in a future update"
-            ):
-                ui.select(
-                    options={"WRF": "World", "TRF": "Tool"},
-                    value="TRF",
-                ).classes("w-24").props("dense disable")
+            ui.select(
+                options={"WRF": "World", "TRF": "Tool"},
+                value=self._rotation_frame,
+                on_change=lambda event: self._set_reference_frame(
+                    rotation=str(event.value)
+                ),
+            ).classes("w-24").props("dense").mark("select-rotation-frame")
+
+    def _set_reference_frame(
+        self,
+        *,
+        translation: str | None = None,
+        rotation: str | None = None,
+    ) -> None:
+        next_translation = translation or self._translation_frame
+        next_rotation = rotation or self._rotation_frame
+        try:
+            if self._on_reference_frames_changed is not None:
+                self._on_reference_frames_changed(next_translation, next_rotation)
+        except Exception as error:
+            ui.notify(operator_error("参考坐标系切换", error), color="warning")
+            return
+        self._translation_frame = next_translation
+        self._rotation_frame = next_rotation
+        ui.notify(
+            f"Cartesian 参考坐标系：平移 {next_translation}，旋转 {next_rotation}",
+            color="positive",
+        )
 
     # ── Main entry point ─────────────────────────────────────────────
 

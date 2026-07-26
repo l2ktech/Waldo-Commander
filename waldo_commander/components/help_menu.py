@@ -192,7 +192,7 @@ class HelpMenu:
             {
                 "title": "Basic Controls",
                 "description": """
-                    Jog in joint space (one joint at a time) or Cartesian space (translate in XYZ, rotate around RX/RY/RZ). Cartesian translation currently operates in the World reference frame while cartesian rotation operates in Tool reference frame. Future support is planned for additional reference frames.
+                    Jog in joint space (one joint at a time) or Cartesian space (translate in XYZ, rotate around RX/RY/RZ). Translation and rotation reference frames can be selected independently as World (WRF) or Tool (TRF) in Settings.
 
                     Keyboard shortcuts: **WASD** + **Q/E** for Cartesian movement, **[** / **]** to adjust speed. Clicking a jog button or key sends a single step; holding it jogs continuously until you release.
                 """,

@@ -891,6 +891,12 @@ class ControlPanel:
 
         # Cartesian axis lookup (lazily built from robot's frame names)
         self._cart_axis_lookup: dict[str, tuple[Axis, float, str]] | None = None
+        self._translation_frame = str(
+            app.storage.general.get("cart_translation_frame", "WRF")
+        )
+        self._rotation_frame = str(
+            app.storage.general.get("cart_rotation_frame", "TRF")
+        )
 
         # Jog cadence constants
         self.JOG_TICK_S: float = config.webapp_control_interval_s
@@ -1114,28 +1120,49 @@ class ControlPanel:
     def _get_cart_axis_lookup(self) -> dict[str, tuple[Axis, float, str]]:
         """Build cartesian axis lookup from the active robot's frame names.
 
-        Translation axes (X, Y, Z) use the first frame (world),
-        rotation axes (RX, RY, RZ) use the second frame (tool).
+        Translation and rotation use the page-selected WRF/TRF modes.
         """
         if self._cart_axis_lookup is not None:
             return self._cart_axis_lookup
         frames = ui_state.active_robot.cartesian_frames
         wrf, trf = frames[0], frames[1]
+        selected_translation = getattr(self, "_translation_frame", "WRF")
+        selected_rotation = getattr(self, "_rotation_frame", "TRF")
+        translation = selected_translation if selected_translation in frames else wrf
+        rotation = selected_rotation if selected_rotation in frames else trf
         self._cart_axis_lookup = {
-            "X+": ("X", 1.0, wrf),
-            "X-": ("X", -1.0, wrf),
-            "Y+": ("Y", 1.0, wrf),
-            "Y-": ("Y", -1.0, wrf),
-            "Z+": ("Z", 1.0, wrf),
-            "Z-": ("Z", -1.0, wrf),
-            "RX+": ("RX", 1.0, trf),
-            "RX-": ("RX", -1.0, trf),
-            "RY+": ("RY", 1.0, trf),
-            "RY-": ("RY", -1.0, trf),
-            "RZ+": ("RZ", 1.0, trf),
-            "RZ-": ("RZ", -1.0, trf),
+            "X+": ("X", 1.0, translation),
+            "X-": ("X", -1.0, translation),
+            "Y+": ("Y", 1.0, translation),
+            "Y-": ("Y", -1.0, translation),
+            "Z+": ("Z", 1.0, translation),
+            "Z-": ("Z", -1.0, translation),
+            "RX+": ("RX", 1.0, rotation),
+            "RX-": ("RX", -1.0, rotation),
+            "RY+": ("RY", 1.0, rotation),
+            "RY-": ("RY", -1.0, rotation),
+            "RZ+": ("RZ", 1.0, rotation),
+            "RZ-": ("RZ", -1.0, rotation),
         }
         return self._cart_axis_lookup
+
+    def set_cartesian_reference_frames(self, translation: str, rotation: str) -> None:
+        frames = tuple(ui_state.active_robot.cartesian_frames)
+        if translation not in frames or rotation not in frames:
+            raise ValueError("Cartesian reference frame is unavailable")
+        if any(self._cart_pressed_axes.values()) or self._tcp_drag_active:
+            raise RuntimeError("请先松开 Cartesian 控件，再切换参考坐标系")
+        self._translation_frame = translation
+        self._rotation_frame = rotation
+        app.storage.general["cart_translation_frame"] = translation
+        app.storage.general["cart_rotation_frame"] = rotation
+        self._cart_axis_lookup = None
+        self._last_cart_controls_available = None
+        self._last_cart_wrf_pos = None
+        self._last_cart_wrf_neg = None
+        self._last_cart_trf_pos = None
+        self._last_cart_trf_neg = None
+        self.sync_cartesian_button_states()
 
     def _apply_pressed_style(self, widget: ui.element | None, pressed: bool) -> None:
         if not widget:
@@ -1370,8 +1397,7 @@ class ControlPanel:
     def sync_cartesian_button_states(self) -> None:
         """Apply stronger disabled visuals to axis icons and mirror to 3D gizmo.
 
-        Translation axes use WRF enablement, rotation axes use TRF enablement
-        (matching the actual jog frame convention).
+        Each axis group follows the page-selected WRF/TRF reference frame.
         """
         frames = ui_state.active_robot.cartesian_frames
         wrf, trf = frames[0], frames[1]
@@ -1412,11 +1438,16 @@ class ControlPanel:
                 self._set_strong_disabled(elem, True)
             return
 
-        # 2D icons: translation axes (i<6) use WRF, rotation axes use TRF.
+        # 2D icons follow the selected translation/rotation reference frames.
         # _AXIS_ORDER is (X+, X-, Y+, Y-, ...), so axis = i // 2 and the
         # per-direction list is chosen by i % 2 (0 = pos, 1 = neg).
         for i, ax in enumerate(_AXIS_ORDER):
-            av = av_wrf if i < 6 else av_trf
+            selected = (
+                getattr(self, "_translation_frame", "WRF")
+                if i < 6
+                else getattr(self, "_rotation_frame", "TRF")
+            )
+            av = av_wrf if selected == wrf else av_trf
             axis = i // 2
             lst = (
                 None
@@ -1964,12 +1995,16 @@ class ControlPanel:
         if is_pressed:
             motion_recorder.on_jog_start("cartesian", axis)
 
-        # Check enablement: translation uses WRF, rotation uses TRF
+        # Check enablement in the frame selected for this axis group.
         frames = ui_state.active_robot.cartesian_frames
         allowed = True
         if axis in _AXIS_ORDER:
             idx = _AXIS_ORDER.index(axis)
-            frame = frames[1] if idx >= 6 else frames[0]
+            frame = (
+                getattr(self, "_rotation_frame", "TRF")
+                if idx >= 6
+                else getattr(self, "_translation_frame", "WRF")
+            )
             frame_av = waldoctl.commander.status.pose.cart_jog.by_frame.get(frame)
             if frame_av is not None:
                 axis_idx = idx // 2
@@ -2005,12 +2040,15 @@ class ControlPanel:
                 axis_letter = axis.rstrip("+-")
                 direction = 1.0 if axis.endswith("+") else -1.0
                 is_rotation = axis_letter.startswith("R")
-                # Use relative move: translation in WRF, rotation in TRF
-                # (matches jog_l hold behavior)
+                # Click and hold use the same operator-selected frame.
                 rel_pose = [0.0] * 6
                 if axis_letter in _AXIS_MAP:
                     rel_pose[_AXIS_MAP[axis_letter]] = direction * step
-                    frame = "TRF" if is_rotation else "WRF"
+                    frame = (
+                        getattr(self, "_rotation_frame", "TRF")
+                        if is_rotation
+                        else getattr(self, "_translation_frame", "WRF")
+                    )
                     logger.info(
                         "Submitting Cartesian click axis=%s frame=%s step=%s speed=%s accel=%s",
                         axis,
@@ -2948,7 +2986,12 @@ class ControlPanel:
             # Settings panel
             with ui.tab_panel(settings_tab).classes("gap-0 p-0"):
                 with ui.scroll_area().classes("w-full h-full p-0"):
-                    self._settings_content = SettingsContent(self.client)
+                    self._settings_content = SettingsContent(
+                        self.client,
+                        translation_frame=self._translation_frame,
+                        rotation_frame=self._rotation_frame,
+                        on_reference_frames_changed=self.set_cartesian_reference_frames,
+                    )
                     self._settings_content.build_embedded(
                         ai_control_section=self._build_control_mode_selector
                     )
