@@ -141,6 +141,12 @@ def test_soft_limit_rejections_are_normal_boundaries(detail: str) -> None:
     assert control._benign_motion_rejection(RuntimeError(detail)) is not None
 
 
+def test_connection_bound_lease_rejection_is_automatically_recoverable() -> None:
+    assert control._is_recoverable_authority_error(
+        RuntimeError("request requires a connection-bound lease")
+    )
+
+
 def test_zdt_urdf_base_and_j4_visual_directions_are_reversed_only_in_the_scene(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

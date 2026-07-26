@@ -86,6 +86,7 @@ def _is_recoverable_authority_error(error: BaseException) -> bool:
         marker in normalized
         for marker in (
             "current grant and lease",
+            "connection-bound lease",
             "stop_already_pending",
             "stop is already pending",
         )
