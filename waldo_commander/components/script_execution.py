@@ -43,6 +43,24 @@ from waldo_commander.operator_messages import operator_error
 logger = logging.getLogger(__name__)
 
 
+def _completion_failure_message(stderr_text: str, return_code: int) -> str:
+    """Return an actionable Chinese summary while preserving stderr in the log."""
+    if "SyntaxError:" in stderr_text or "IndentationError:" in stderr_text:
+        return (
+            "程序运行失败：Python 语法或缩进错误。"
+            "处理方法：请按下方 [ERR] 日志中的文件名、行号和 ^ 指示修正代码后重试。"
+        )
+    if "ModuleNotFoundError:" in stderr_text or "ImportError:" in stderr_text:
+        return (
+            "程序运行失败：Python 依赖或导入不可用。"
+            "处理方法：请查看下方 [ERR] 日志最后一行，确认模块名和当前运行环境后重试。"
+        )
+    return (
+        f"程序运行失败：Python 程序发生运行时异常（退出码 {return_code}）。"
+        "处理方法：请查看下方 [ERR] 日志最后一行，修正代码、参数或依赖后重试。"
+    )
+
+
 class ScriptExecutionController:
     """Owns the script subprocess lifecycle and GUI step controller.
 
@@ -351,6 +369,18 @@ class ScriptExecutionController:
             if self.script_handle is handle:
                 self.last_exit_code = rc
                 with ui_client:
+                    if rc != 0:
+                        running_tab = self._launching_program()
+                        stderr_text = "\n".join(
+                            entry.text
+                            for entry in (running_tab.log if running_tab else [])
+                            if entry.stream == "stderr"
+                        )
+                        ui.notify(
+                            _completion_failure_message(stderr_text, rc),
+                            color="negative",
+                            timeout=8000,
+                        )
                     self._reset_state()
                     logger.info("Script %s finished with code %s", filename, rc)
         except Exception as e:

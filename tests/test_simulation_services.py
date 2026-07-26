@@ -1415,6 +1415,19 @@ class TestSimPoseOverrideAutoClear:
 class TestScriptExecutionLifecycle:
     """Tests for ScriptExecutionController subprocess lifecycle."""
 
+    def test_completion_failure_message_is_actionable_chinese(self):
+        from waldo_commander.components.script_execution import (
+            _completion_failure_message,
+        )
+
+        syntax = _completion_failure_message("SyntaxError: invalid syntax", 1)
+        runtime = _completion_failure_message("ValueError: bad value", 1)
+
+        assert "Python 语法或缩进错误" in syntax
+        assert "处理方法" in syntax
+        assert "运行时异常" in runtime
+        assert "处理方法" in runtime
+
     @pytest.mark.asyncio
     async def test_start_reaps_subprocess_on_late_exception(
         self, tmp_path, monkeypatch
