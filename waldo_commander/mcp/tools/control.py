@@ -231,8 +231,16 @@ async def get_controller() -> dict:
     and is set by the human, not the LLM — it governs whether your edits apply
     immediately and whether each move needs per-action approval."""
     mode = control_mode()
+    holder = control_lease.holder()
+    active_id = ui_state.active_client_id
+    active_client = Client.instances.get(active_id) if active_id else None
+    request_client = getattr(getattr(active_client, "request", None), "client", None)
     return {
-        "holder": control_lease.describe(),
+        "holder": holder.label if holder is not None else "no one",
+        "holder_channel": holder.channel if holder is not None else None,
+        "holder_id": holder.id if holder is not None else None,
+        "active_browser_id": active_id,
+        "active_browser_host": getattr(request_client, "host", None),
         "you_hold_it": control_lease.held_by(MCP, _session_id()),
         "mode": mode.value,
         "mode_auto_applies_edits": mode.auto_applies_edits,
