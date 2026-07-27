@@ -118,7 +118,7 @@ _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 # power-off placement and fresh six-axis readback on 2026-07-26.
 _ZDT_PARKING_JOINTS_DEG = (
     0.0,
-    -130.0,
+    -135.0,
     110.0,
     0.0,
     -37.0,
