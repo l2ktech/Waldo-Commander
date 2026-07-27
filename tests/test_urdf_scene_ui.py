@@ -33,6 +33,26 @@ async def test_urdf_scene_joint_names(user: User) -> None:
 
 
 @pytest.mark.integration
+async def test_joint_limit_arcs_are_attached_to_the_robot_model(user: User) -> None:
+    """Each actuated joint exposes its limit arc, endpoints, marker, and label."""
+    from waldo_commander.state import ui_state
+
+    await user.open("/")
+    await wait_for_urdf_ready()
+
+    scene = ui_state.urdf_scene
+    assert scene is not None and scene.scene is not None
+    names = {obj.name for obj in scene.scene.objects.values() if obj.name}
+    for joint in range(1, 7):
+        prefix = f"joint-limit:J{joint}:"
+        assert prefix + "arc" in names
+        assert prefix + "min" in names
+        assert prefix + "max" in names
+        assert prefix + "current" in names
+        assert prefix + "label" in names
+
+
+@pytest.mark.integration
 async def test_urdf_scene_envelope_pregenerated_on_startup(
     user: User, enable_envelope
 ) -> None:

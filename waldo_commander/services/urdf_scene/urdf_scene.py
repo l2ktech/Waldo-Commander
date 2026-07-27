@@ -14,6 +14,7 @@ This file incorporates extensions:
 """
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -36,6 +37,7 @@ from waldo_commander.common.theme import (
     get_color_for_move_type,
 )
 from waldo_commander.constants import WAYPOINT_SIZE_LARGE, WAYPOINT_SIZE_SMALL
+from waldo_commander.robot_limits import effective_joint_limits_deg
 from waldo_commander.services.urdf_scene.scene_batch import batch_scene
 from waldo_commander.state import simulation_state, robot_state, ui_state
 
@@ -129,6 +131,25 @@ def _lerp_hex(c1: tuple[int, int, int], c2: tuple[int, int, int], factor: float)
     g = int(c1[1] + (c2[1] - c1[1]) * factor + 0.5)
     b = int(c1[2] + (c2[2] - c1[2]) * factor + 0.5)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _joint_limit_label_text(
+    joint_number: int,
+    current_deg: float,
+    lo_deg: float,
+    hi_deg: float,
+) -> tuple[str, tuple[float, float, float]]:
+    """Format current angle and remaining travel for an in-scene joint label."""
+    values = (
+        round(current_deg, 1),
+        round(max(0.0, current_deg - lo_deg), 1),
+        round(max(0.0, hi_deg - current_deg), 1),
+    )
+    text = (
+        f"J{joint_number} {values[0]:+.1f}°  "
+        f"−余{values[1]:.1f}° / +余{values[2]:.1f}°"
+    )
+    return text, values
 
 
 class RenderedSegment(NamedTuple):
@@ -262,6 +283,7 @@ class UrdfScene(
 
         # Scene-related state
         self.joint_groups: dict[str, Any] = {}
+        self.joint_frames: dict[str, Any] = {}
         self.joint_pos_limits: dict[str, dict[str, float | None]] = {}
         self.joint_trafos: dict = {}
         self.scene: Any | None = None
@@ -298,6 +320,9 @@ class UrdfScene(
         self._rendered_playback_step: int = -1
 
         self._robot_meshes: list[ui.scene.stl] = []
+        self._joint_limit_marker_groups: dict[int, Any] = {}
+        self._joint_limit_labels: dict[int, Any] = {}
+        self._joint_limit_label_values: dict[int, tuple[float, float, float]] = {}
 
         # Tool mesh state
         self._tool_meshes_group: Any | None = None
@@ -422,6 +447,8 @@ class UrdfScene(
                         scale_stls=self._stl_scale,
                         material=material,
                     )
+
+                self._create_joint_limit_visuals()
 
                 with ui.scene.group().with_name("simulation:root") as sim_grp:
                     self.simulation_group = sim_grp
@@ -1628,11 +1655,117 @@ class UrdfScene(
             return
 
         with batch_scene(self.scene):
-            for joint_name, q in zip(self.joint_names, val):
+            for index, (joint_name, q) in enumerate(zip(self.joint_names, val)):
                 joint_TF = self.joint_trafos[joint_name]
                 joint_i = self.joint_groups[joint_name]
                 t, r = joint_TF(q)
                 joint_i.move(*t).rotate(*r)
+                marker = self._joint_limit_marker_groups.get(index)
+                if marker is not None:
+                    marker.rotate(0.0, 0.0, float(q))
+        self._update_joint_limit_labels()
+
+    def _create_joint_limit_visuals(self) -> None:
+        """Attach soft-limit arcs and current-angle markers to each joint frame."""
+        if not self.scene:
+            return
+        limits_deg = effective_joint_limits_deg(ui_state.active_robot)
+        current_angles = waldoctl.commander.status.joints.angles.deg
+        for index, joint_name in enumerate(self.joint_names):
+            frame = self.joint_frames.get(joint_name)
+            if frame is None or index >= len(limits_deg):
+                continue
+            lo_deg, hi_deg = (float(v) for v in limits_deg[index])
+            current_deg = (
+                float(current_angles[index]) if index < len(current_angles) else 0.0
+            )
+            label_text, label_values = _joint_limit_label_text(
+                index + 1, current_deg, lo_deg, hi_deg
+            )
+            sign = float(self.config.angle_signs[index])
+            offset = float(self.config.angle_offsets[index])
+            visual_limits = sorted((sign * lo_deg + offset, sign * hi_deg + offset))
+            lo_rad, hi_rad = (math.radians(v) for v in visual_limits)
+            axis = np.asarray(self.joint_axes[joint_name], dtype=np.float64)
+            align = _z_align_rotation(axis)
+            radius = 0.064 if index in (2, 3, 4) else 0.050
+            tube = 0.0035 if index in (2, 3, 4) else 0.0025
+
+            def _point(angle: float, r: float = radius) -> list[float]:
+                local = np.asarray((r * math.cos(angle), r * math.sin(angle), 0.0))
+                return (align @ local).tolist()
+
+            label_angle = (lo_rad + hi_rad) * 0.5
+            label_local = np.asarray(
+                (
+                    (radius + 0.024) * math.cos(label_angle),
+                    (radius + 0.024) * math.sin(label_angle),
+                    0.018,
+                )
+            )
+            label_position = align @ label_local
+
+            with frame:
+                with ui.scene.group().rotate_R(align.tolist()):
+                    ui.scene.ring(
+                        radius - tube,
+                        radius + tube,
+                        theta_segments=48,
+                        theta_start=lo_rad,
+                        theta_length=hi_rad - lo_rad,
+                    ).material("#22d3ee", 0.58, side="both").with_name(
+                        f"joint-limit:J{index + 1}:arc"
+                    )
+                    with ui.scene.group() as marker:
+                        ui.scene.line([0.0, 0.0, 0.0], [radius, 0.0, 0.0]).material(
+                            "#facc15", 1.0
+                        ).with_name(f"joint-limit:J{index + 1}:current")
+                    self._joint_limit_marker_groups[index] = marker
+                ui.scene.sphere(tube * 1.8).move(*_point(lo_rad)).material(
+                    "#ef4444", 0.95
+                ).with_name(f"joint-limit:J{index + 1}:min")
+                ui.scene.sphere(tube * 1.8).move(*_point(hi_rad)).material(
+                    "#22c55e", 0.95
+                ).with_name(f"joint-limit:J{index + 1}:max")
+                label = (
+                    ui.scene.text(
+                        label_text,
+                        "color:#e5f7ff;background:rgba(8,15,22,.84);"
+                        "padding:3px 5px;border:1px solid rgba(34,211,238,.45);"
+                        "border-radius:4px;font:600 11px sans-serif;white-space:nowrap;",
+                    )
+                    .move(*label_position.tolist())
+                    .with_name(f"joint-limit:J{index + 1}:label")
+                )
+                self._joint_limit_labels[index] = label
+                self._joint_limit_label_values[index] = label_values
+
+    def _update_joint_limit_labels(self, *, force: bool = False) -> None:
+        """Update in-scene joint labels from controller angles and soft limits."""
+        if not self.scene or not self._joint_limit_labels:
+            return
+        angles = waldoctl.commander.status.joints.angles.deg
+        limits = effective_joint_limits_deg(ui_state.active_robot)
+        updates: list[tuple[str, str]] = []
+        for index, label in self._joint_limit_labels.items():
+            if index >= len(angles) or index >= len(limits):
+                continue
+            current = float(angles[index])
+            lo, hi = (float(v) for v in limits[index])
+            text, values = _joint_limit_label_text(index + 1, current, lo, hi)
+            if not force and self._joint_limit_label_values.get(index) == values:
+                continue
+            self._joint_limit_label_values[index] = values
+            updates.append((label.id, text))
+        if not updates:
+            return
+        scene_id = json.dumps(self.scene.id)
+        payload = json.dumps(updates, ensure_ascii=False)
+        self.scene.client.run_javascript(
+            f"(()=>{{const s=window['scene_'+{scene_id}];if(!s)return;"
+            f"for(const[id,text]of {payload}){{const o=s.objects.get(id);"
+            "if(o?.element)o.element.textContent=text;}}})();"
+        )
 
     def _apply_joint_angles(self, angles_rad: list[float]) -> None:
         """Apply joint angles to the main robot joint groups.
@@ -2039,10 +2172,11 @@ class UrdfScene(
         """Recursively add joint and child link to scene."""
         t, r = get_transl_and_rpy(joint.origin)
         # Static transform from parent link to this joint frame.
-        with ui.scene.group().move(*t).rotate(*r):
+        with ui.scene.group().move(*t).rotate(*r) as joint_frame:
             # Inner group carries the dynamic joint value (q).
             with ui.scene.group() as joint_trafo:
                 if joint.joint_type != "fixed":
+                    self.joint_frames[joint.name] = joint_frame
                     self.joint_groups[joint.name] = joint_trafo
 
                     if joint.joint_type == "prismatic":

@@ -22,6 +22,7 @@ from pinokin import arrays_equal_n
 import waldoctl
 from waldoctl import (
     Commander,
+    EnvelopeMode,
     FrameJogAvailability,
     GripperTool,
     LinearMotion,
@@ -359,7 +360,11 @@ async def initialize_urdf_scene(page_state: _PageState) -> bool:
         scene.invalidate_fk_cache()
 
     # Generate the workspace hull with the correct tool offset (after tool applied).
-    if not os.environ.get("WALDO_SKIP_ENVELOPE") and not workspace_envelope.is_ready:
+    if (
+        not os.environ.get("WALDO_SKIP_ENVELOPE")
+        and waldoctl.commander.settings.view.envelope_mode is not EnvelopeMode.OFF
+        and not workspace_envelope.is_ready
+    ):
         workspace_envelope.generate(
             tool_offset_z=scene._current_tool_offset_z
         )

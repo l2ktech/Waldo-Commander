@@ -9,7 +9,10 @@ from waldo_commander.components import control
 from waldo_commander import main as commander_main
 from waldo_commander.components.playback import PlaybackController
 from waldo_commander.operator_messages import operator_error
-from waldo_commander.services.urdf_scene.urdf_scene import _visual_mesh_scale
+from waldo_commander.services.urdf_scene.urdf_scene import (
+    _joint_limit_label_text,
+    _visual_mesh_scale,
+)
 from waldo_commander.services.urdf_scene.envelope_renderer import (
     _nearest_hull_boundary,
 )
@@ -165,6 +168,12 @@ def test_nearest_workspace_boundary_distance() -> None:
     assert inside is True
     assert distance == pytest.approx(0.75)
     assert boundary.tolist() == pytest.approx([1.0, 0.0, 0.0])
+
+
+def test_joint_limit_scene_label_reports_both_remaining_directions() -> None:
+    text, values = _joint_limit_label_text(5, -52.9, -57.539281, 3.163844)
+    assert values == (-52.9, 4.6, 56.1)
+    assert text == "J5 -52.9°  −余4.6° / +余56.1°"
 
 
 @pytest.mark.parametrize(

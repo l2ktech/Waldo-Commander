@@ -88,9 +88,12 @@ class SettingsContent:
         if stored_profile not in valid_profiles and valid_profiles:
             stored_profile = valid_profiles[0]
         stored_envelope_mode = ng_app.storage.general.get("envelope_mode", "auto")
-        if self._fixed_zdt_backend() and stored_envelope_mode == "auto":
-            stored_envelope_mode = "on"
+        if self._fixed_zdt_backend() and not ng_app.storage.general.get(
+            "joint_limit_scene_v1"
+        ):
+            stored_envelope_mode = "off"
             ng_app.storage.general["envelope_mode"] = stored_envelope_mode
+            ng_app.storage.general["joint_limit_scene_v1"] = True
         return {
             "com_port": ng_app.storage.general.get("com_port", ""),
             "show_route": ng_app.storage.general.get("show_route", True),
