@@ -130,6 +130,19 @@ def test_joint_commands_keep_braking_margin_from_soft_limits() -> None:
     assert control._joint_command_bounds(-10.0, 10.0) == (-9.5, 9.5)
 
 
+def test_joint_range_hud_reports_position_and_remaining_travel() -> None:
+    assert control._joint_range_state(-5.0, -10.0, 10.0) == {
+        "position": 0.25,
+        "remaining_neg": 5.0,
+        "remaining_pos": 15.0,
+    }
+    assert control._joint_range_state(-11.0, -10.0, 10.0) == {
+        "position": 0.0,
+        "remaining_neg": 0.0,
+        "remaining_pos": 21.0,
+    }
+
+
 @pytest.mark.parametrize(
     "detail",
     [

@@ -153,6 +153,27 @@ def _joint_has_remaining_travel(
         return value_deg < limit_deg - 1e-6
     raise ValueError(f"unsupported joint direction: {direction}")
 
+
+def _joint_range_state(
+    value_deg: float, lo_deg: float, hi_deg: float
+) -> dict[str, float]:
+    """Return normalized position and remaining travel for the joint-range HUD."""
+    if (
+        not all(math.isfinite(v) for v in (value_deg, lo_deg, hi_deg))
+        or hi_deg <= lo_deg
+    ):
+        return {
+            "position": 0.0,
+            "remaining_neg": 0.0,
+            "remaining_pos": 0.0,
+        }
+    return {
+        "position": max(0.0, min(1.0, (value_deg - lo_deg) / (hi_deg - lo_deg))),
+        "remaining_neg": max(0.0, value_deg - lo_deg),
+        "remaining_pos": max(0.0, hi_deg - value_deg),
+    }
+
+
 # SVG icon transform lookup: (vb_width, vb_height) -> default transform
 _ICON_TRANSFORMS: dict[tuple[int, int], str] = {
     (32, 32): "translate(-2,-2) scale(0.85)",
@@ -983,6 +1004,86 @@ class ControlPanel:
         )
 
         self._jog_end_wait_task: asyncio.Task | None = None
+
+    def build_joint_range_hud(self) -> None:
+        """Overlay live joint angles and soft-limit travel above the 3D scene."""
+        with (
+            ui.card()
+            .classes("joint-range-hud overlay-card")
+            .mark("joint-range-hud")
+        ):
+            with ui.row().classes("joint-range-hud-title items-center no-wrap"):
+                ui.icon("straighten", size="xs")
+                ui.label("关节可运动范围（软限位）")
+                ui.label("实时角度 / 剩余负向 · 正向行程").classes(
+                    "joint-range-hud-subtitle"
+                )
+
+            with ui.element("div").classes("joint-range-grid"):
+                for idx in range(self._n_joints):
+                    lo, hi = self._get_joint_limits(idx)
+                    with (
+                        ui.element("div")
+                        .classes("joint-range-item")
+                        .mark(f"joint-range-j{idx + 1}")
+                    ):
+                        with ui.row().classes(
+                            "joint-range-heading items-center justify-between no-wrap"
+                        ):
+                            ui.label(f"J{idx + 1}").classes("joint-range-name")
+                            current = ui.label("--°").classes("joint-range-current")
+
+                        progress = (
+                            ui.linear_progress(value=0.0, show_value=False)
+                            .props("rounded instant-feedback")
+                            .classes("joint-range-progress")
+                        )
+                        limits = ui.label(f"{lo:+.1f}° — {hi:+.1f}°").classes(
+                            "joint-range-limits"
+                        )
+                        remaining = ui.label("余 --° · --°").classes(
+                            "joint-range-remaining"
+                        )
+
+                        def _position(a, i=idx, lower=lo, upper=hi) -> float:
+                            if len(a) <= i:
+                                return 0.0
+                            return _joint_range_state(float(a[i]), lower, upper)[
+                                "position"
+                            ]
+
+                        def _current(a, i=idx) -> str:
+                            if len(a) <= i or not math.isfinite(float(a[i])):
+                                return "--°"
+                            return f"{float(a[i]):+.1f}°"
+
+                        def _remaining(a, i=idx, lower=lo, upper=hi) -> str:
+                            if len(a) <= i or not math.isfinite(float(a[i])):
+                                return "余 --° · --°"
+                            state = _joint_range_state(float(a[i]), lower, upper)
+                            return (
+                                f"余 −{state['remaining_neg']:.1f}°"
+                                f" · +{state['remaining_pos']:.1f}°"
+                            )
+
+                        progress.bind_value_from(
+                            waldoctl.commander.status.joints,
+                            "angles",
+                            backward=_position,
+                        )
+                        current.bind_text_from(
+                            waldoctl.commander.status.joints,
+                            "angles",
+                            backward=_current,
+                        )
+                        remaining.bind_text_from(
+                            waldoctl.commander.status.joints,
+                            "angles",
+                            backward=_remaining,
+                        )
+                        limits.tooltip(
+                            f"J{idx + 1} 软限位：{lo:+.3f}° 至 {hi:+.3f}°"
+                        )
 
     # ---- Helper methods ----
 
