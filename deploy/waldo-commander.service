@@ -9,9 +9,9 @@ User=wzy
 Group=wzy
 WorkingDirectory=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander
 Environment=WALDO_READ_ONLY=1
-Environment=WALDO_SKIP_ENVELOPE=1
 Environment=WALDO_EXCLUSIVE_START=1
 Environment=NUMBA_CACHE_DIR=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.cache/numba
+Environment=WALDO_CACHE_DIR=/var/lib/parol6-zdt/waldo/workspace
 Environment=LD_LIBRARY_PATH=/opt/nvidia/nsight-systems/2025.5.2/host-linux-x64:/opt/parol6-zdt/current/lib/python3.12/site-packages/cmeel.prefix/lib
 ExecStart=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.venv/bin/waldo-commander --robot parol6_zdt --host 0.0.0.0 --port 8011 --log-level INFO
 Restart=on-failure
@@ -22,6 +22,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander
+ReadWritePaths=/var/lib/parol6-zdt/waldo
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 IPAddressDeny=any
 IPAddressAllow=localhost

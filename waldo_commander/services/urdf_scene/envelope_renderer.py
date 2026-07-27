@@ -12,6 +12,7 @@ threading.
 """
 
 import hashlib
+import json
 import logging
 import math
 import os
@@ -26,6 +27,7 @@ import waldoctl
 from waldoctl import EnvelopeMode
 
 from waldo_commander.common.theme import SceneColors
+from waldo_commander.robot_limits import effective_joint_limits_rad
 from waldo_commander.state import simulation_state
 
 
@@ -43,6 +45,8 @@ CACHE_DIR = Path(
 ).expanduser()
 HULL_STL_FILENAME = "workspace_hull.stl"
 HULL_STL_PATH = CACHE_DIR / HULL_STL_FILENAME
+HULL_DATA_FILENAME = "workspace_hull.npz"
+HULL_DATA_PATH = CACHE_DIR / HULL_DATA_FILENAME
 
 STORAGE_KEY = "workspace_hull_cache"
 
@@ -101,6 +105,7 @@ class WorkspaceEnvelope:
         self._generating = False
         self._current_tool_offset_z: float = 0.0
         self._pending_tool_offset: float | None = None
+        self.equations: np.ndarray | None = None
         # Stored from _get_hull_params() so cache key computation never reads ui_state
         self._urdf_path: str | None = None
         self._joint_limits_rad: np.ndarray | None = None
@@ -126,7 +131,7 @@ class WorkspaceEnvelope:
         if ui_state.robot is None:
             return None, None
         urdf_path = ui_state.active_robot.urdf_path
-        joint_limits_rad = ui_state.active_robot.joints.limits.position.rad
+        joint_limits_rad = effective_joint_limits_rad(ui_state.active_robot)
         # Stored for cache key use — avoids a TOCTOU race
         self._urdf_path = urdf_path
         self._joint_limits_rad = joint_limits_rad
@@ -186,9 +191,14 @@ class WorkspaceEnvelope:
                 )
                 return False
 
-            if not HULL_STL_PATH.exists():
-                logger.info("Hull STL file missing, will regenerate")
+            if not HULL_STL_PATH.exists() or not HULL_DATA_PATH.exists():
+                logger.info("Hull cache files missing, will regenerate")
                 return False
+
+            with np.load(HULL_DATA_PATH, allow_pickle=False) as hull_data:
+                self.equations = np.asarray(
+                    hull_data["equations"], dtype=np.float64
+                )
 
             self.max_reach = cache.get("max_reach", 0.0)
             self._current_tool_offset_z = tool_offset_z
@@ -242,10 +252,15 @@ class WorkspaceEnvelope:
         self.max_reach = result["max_reach"]
         vertices = np.array(result["vertices"])
         faces = np.array(result["faces"])
+        equations = np.asarray(result["equations"], dtype=np.float64)
 
         if not _save_hull_as_stl(vertices, faces, HULL_STL_PATH):
             logger.warning("Failed to save hull STL")
             return False
+
+        HULL_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(HULL_DATA_PATH, equations=equations)
+        self.equations = equations
 
         self._ensure_static_files_registered()
         self.stl_url = self._get_stl_url()
@@ -287,7 +302,7 @@ class WorkspaceEnvelope:
             return True
 
         if self._generating:
-            logger.info("Workspace generation already in progress")
+            logger.debug("Workspace generation already in progress")
             return True
 
         # Checked after _generated/_generating so tests can still verify those paths
@@ -400,6 +415,7 @@ class WorkspaceEnvelope:
         self._generating = False
         self._urdf_path = None
         self._joint_limits_rad = None
+        self.equations = None
 
     def invalidate_cache(self) -> None:
         """Invalidate cache and delete STL file."""
@@ -408,6 +424,8 @@ class WorkspaceEnvelope:
                 del app.storage.general[STORAGE_KEY]
             if HULL_STL_PATH.exists():
                 HULL_STL_PATH.unlink()
+            if HULL_DATA_PATH.exists():
+                HULL_DATA_PATH.unlink()
             logger.info("Invalidated workspace hull cache")
         except Exception as e:
             logger.warning("Failed to invalidate cache: %s", e)
@@ -542,6 +560,7 @@ def _generate_hull_cpu_bound(
                 "max_reach": max_reach,
                 "vertices": vertices,
                 "faces": faces,
+                "equations": hull.equations.tolist(),
             }
         except Exception as e:
             sub_logger.error("ConvexHull computation failed: %s", e)
@@ -557,6 +576,27 @@ def _generate_hull_cpu_bound(
 
 # Singleton instance
 workspace_envelope = WorkspaceEnvelope()
+
+
+def _nearest_hull_boundary(
+    point: np.ndarray, equations: np.ndarray
+) -> tuple[float, np.ndarray, bool]:
+    """Return distance, nearest supporting-plane point, and inside state."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    eq = np.asarray(equations, dtype=np.float64)
+    if eq.ndim != 2 or eq.shape[1] != 4 or len(eq) == 0:
+        raise ValueError("convex hull equations must have shape (N, 4)")
+    normals = eq[:, :3]
+    norms = np.linalg.norm(normals, axis=1)
+    if np.any(norms <= 1e-12):
+        raise ValueError("convex hull contains a zero-length plane normal")
+    signed_inside_distances = -(normals @ p + eq[:, 3]) / norms
+    inside = bool(np.all(signed_inside_distances >= -1e-9))
+    index = int(np.argmin(np.abs(signed_inside_distances)))
+    signed_distance = float(signed_inside_distances[index])
+    normal = normals[index] / norms[index]
+    boundary = p + normal * signed_distance
+    return abs(signed_distance), boundary, inside
 
 
 class EnvelopeRenderer:
@@ -580,14 +620,21 @@ class EnvelopeRenderer:
 
         self._current_tool: str = "none"
         self._current_tool_offset_z: float = 0.0
+        self._envelope_distance_line: Any | None = None
+        self._envelope_distance_text: Any | None = None
+        self._envelope_boundary_marker: Any | None = None
+        self._last_envelope_measurement: tuple[float, ...] | None = None
 
     @staticmethod
     def _is_near_boundary(x_m: float, y_m: float, z_m: float) -> bool:
         """Check if a point (in meters) is within proximity threshold of the workspace boundary."""
-        if not workspace_envelope.is_ready or workspace_envelope.max_reach <= 0:
+        equations = workspace_envelope.equations
+        if not workspace_envelope.is_ready or equations is None:
             return False
-        dist = math.sqrt(x_m * x_m + y_m * y_m + z_m * z_m)
-        return dist >= workspace_envelope.max_reach - ENVELOPE_PROXIMITY_THRESHOLD
+        distance, _boundary, inside = _nearest_hull_boundary(
+            np.asarray((x_m, y_m, z_m), dtype=np.float64), equations
+        )
+        return not inside or distance <= ENVELOPE_PROXIMITY_THRESHOLD
 
     def _create_envelope_object(self) -> bool:
         """Create the envelope hull STL object if not already created.
@@ -602,9 +649,11 @@ class EnvelopeRenderer:
         try:
             with self.simulation_group:
                 self.envelope_object = ui.scene.stl(
-                    workspace_envelope.stl_url, wireframe=True
+                    workspace_envelope.stl_url, wireframe=False
                 ).with_name("envelope:hull")
-                self.envelope_object.material(SceneColors.ENVELOPE_HEX, 0.8)
+                self.envelope_object.material(
+                    SceneColors.ENVELOPE_HEX, 0.14, side="both"
+                )
             self._envelope_visible = True
             return True
         except Exception as e:
@@ -627,6 +676,7 @@ class EnvelopeRenderer:
         if mode is EnvelopeMode.ON:
             if not self._envelope_visible:
                 self._show_envelope(clipped=False)
+            self._update_envelope_measurement()
             return
 
         # Auto — show with proximity clipping when near the boundary
@@ -637,8 +687,91 @@ class EnvelopeRenderer:
         )
         if self._is_near_boundary(*tcp):
             self._show_envelope(clipped=True, approaching_positions=[tcp])
+            self._update_envelope_measurement()
         else:
             self._hide_envelope()
+
+    def _create_envelope_measurement_objects(
+        self,
+        tcp: np.ndarray,
+        boundary: np.ndarray,
+        label: str,
+    ) -> None:
+        """Create the in-scene TCP-to-workspace-boundary indicator."""
+        with self.simulation_group:
+            self._envelope_distance_line = (
+                ui.scene.line(tcp.tolist(), boundary.tolist())
+                .material("#ffcc33", 0.95)
+                .with_name("envelope:tcp-distance")
+            )
+            self._envelope_boundary_marker = (
+                ui.scene.sphere(0.012)
+                .move(*boundary.tolist())
+                .material("#ffcc33", 0.95)
+                .with_name("envelope:nearest-boundary")
+            )
+            label_position = tcp + np.asarray((0.0, 0.0, 0.055))
+            self._envelope_distance_text = (
+                ui.scene.text(
+                    label,
+                    "color:#ffdb66;background:rgba(15,18,22,.82);"
+                    "padding:3px 6px;border-radius:5px;font:600 13px sans-serif;"
+                    "white-space:nowrap;",
+                )
+                .move(*label_position.tolist())
+                .with_name("envelope:tcp-distance-label")
+            )
+
+    def _update_envelope_measurement(self) -> None:
+        """Show the current TCP's nearest distance to the sampled FK hull."""
+        equations = workspace_envelope.equations
+        if equations is None or self.scene is None:
+            return
+        tcp = np.asarray(
+            (
+                waldoctl.commander.status.pose.x / 1000.0,
+                waldoctl.commander.status.pose.y / 1000.0,
+                waldoctl.commander.status.pose.z / 1000.0,
+            ),
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(tcp)):
+            return
+        distance, boundary, inside = _nearest_hull_boundary(tcp, equations)
+        signature = tuple(np.round(np.concatenate((tcp, boundary)), 4))
+        if signature == self._last_envelope_measurement:
+            return
+        self._last_envelope_measurement = signature
+        label = (
+            f"TCP距可达边界 {distance * 1000.0:.0f} mm"
+            if inside
+            else f"TCP超出估算边界 {distance * 1000.0:.0f} mm"
+        )
+        if self._envelope_distance_line is None or self._envelope_distance_text is None:
+            self._create_envelope_measurement_objects(tcp, boundary, label)
+            return
+
+        label_position = tcp + np.asarray((0.0, 0.0, 0.055))
+        self._envelope_distance_text.move(*label_position.tolist()).visible(True)
+        self._envelope_distance_line.visible(True)
+        if self._envelope_boundary_marker is not None:
+            self._envelope_boundary_marker.move(*boundary.tolist()).visible(True)
+        scene_id = json.dumps(self.scene.id)
+        line_id = json.dumps(self._envelope_distance_line.id)
+        text_id = json.dumps(self._envelope_distance_text.id)
+        start = json.dumps(tcp.tolist())
+        end = json.dumps(boundary.tolist())
+        text = json.dumps(label, ensure_ascii=False)
+        self.scene.client.run_javascript(
+            f"(()=>{{const s=window['scene_'+{scene_id}];if(!s)return;"
+            f"const l=s.objects.get({line_id});if(l?.geometry){{"
+            f"const a=l.geometry.attributes.position?.array;if(a?.length>=6){{"
+            f"a.set([...{start},...{end}]);"
+            "l.geometry.attributes.position.needsUpdate=true;"
+            "l.geometry.computeBoundingSphere();}}}"
+            f"const t=s.objects.get({text_id});if(t?.element)t.element.textContent={text};"
+            "}})();"
+        )
 
     def _show_envelope(
         self,
@@ -671,6 +804,12 @@ class EnvelopeRenderer:
             self.envelope_object.visible(False)
             self._envelope_visible = False
             self.envelope_object.clear_clipping_planes()
+        if self._envelope_distance_line is not None:
+            self._envelope_distance_line.visible(False)
+        if self._envelope_distance_text is not None:
+            self._envelope_distance_text.visible(False)
+        if self._envelope_boundary_marker is not None:
+            self._envelope_boundary_marker.visible(False)
 
     def _calculate_envelope_clipping_planes(
         self,

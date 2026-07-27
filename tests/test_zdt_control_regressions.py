@@ -10,6 +10,10 @@ from waldo_commander import main as commander_main
 from waldo_commander.components.playback import PlaybackController
 from waldo_commander.operator_messages import operator_error
 from waldo_commander.services.urdf_scene.urdf_scene import _visual_mesh_scale
+from waldo_commander.services.urdf_scene.envelope_renderer import (
+    _nearest_hull_boundary,
+)
+from waldo_commander.robot_limits import effective_joint_limits_deg
 
 
 def test_incremental_joint_moves_allow_slow_hardware_settling() -> None:
@@ -130,17 +134,37 @@ def test_joint_commands_keep_braking_margin_from_soft_limits() -> None:
     assert control._joint_command_bounds(-10.0, 10.0) == (-9.5, 9.5)
 
 
-def test_joint_range_hud_reports_position_and_remaining_travel() -> None:
-    assert control._joint_range_state(-5.0, -10.0, 10.0) == {
-        "position": 0.25,
-        "remaining_neg": 5.0,
-        "remaining_pos": 15.0,
-    }
-    assert control._joint_range_state(-11.0, -10.0, 10.0) == {
-        "position": 0.0,
-        "remaining_neg": 0.0,
-        "remaining_pos": 21.0,
-    }
+def test_zdt_workspace_uses_deployed_soft_limits() -> None:
+    robot = SimpleNamespace(
+        backend_package="parol6_zdt_backend",
+        joints=SimpleNamespace(
+            limits=SimpleNamespace(
+                position=SimpleNamespace(deg=np.asarray([[-999.0, 999.0]] * 6))
+            )
+        ),
+    )
+    limits = effective_joint_limits_deg(robot)
+    assert limits[1].tolist() == pytest.approx([-137.0, -37.098302649122786])
+    assert limits[4].tolist() == pytest.approx([-57.539281, 3.163844])
+
+
+def test_nearest_workspace_boundary_distance() -> None:
+    equations = np.asarray(
+        [
+            [1.0, 0.0, 0.0, -1.0],
+            [-1.0, 0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0, -1.0],
+            [0.0, -1.0, 0.0, -1.0],
+            [0.0, 0.0, 1.0, -1.0],
+            [0.0, 0.0, -1.0, -1.0],
+        ]
+    )
+    distance, boundary, inside = _nearest_hull_boundary(
+        np.asarray([0.25, 0.0, 0.0]), equations
+    )
+    assert inside is True
+    assert distance == pytest.approx(0.75)
+    assert boundary.tolist() == pytest.approx([1.0, 0.0, 0.0])
 
 
 @pytest.mark.parametrize(

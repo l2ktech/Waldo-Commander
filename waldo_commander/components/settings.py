@@ -87,12 +87,14 @@ class SettingsContent:
         stored_profile = ng_app.storage.general.get("motion_profile", "TOPPRA")
         if stored_profile not in valid_profiles and valid_profiles:
             stored_profile = valid_profiles[0]
+        stored_envelope_mode = ng_app.storage.general.get("envelope_mode", "auto")
+        if self._fixed_zdt_backend() and stored_envelope_mode == "auto":
+            stored_envelope_mode = "on"
+            ng_app.storage.general["envelope_mode"] = stored_envelope_mode
         return {
             "com_port": ng_app.storage.general.get("com_port", ""),
             "show_route": ng_app.storage.general.get("show_route", True),
-            "envelope_mode": EnvelopeMode(
-                ng_app.storage.general.get("envelope_mode", "auto")
-            ),
+            "envelope_mode": EnvelopeMode(stored_envelope_mode),
             "theme_mode": ng_app.storage.general.get("theme_mode", "system"),
             "motion_profile": stored_profile,
         }

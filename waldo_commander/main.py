@@ -1110,7 +1110,6 @@ def build_page_content(page_state: _PageState) -> Any:
                 panel_refs = _build_left_panels(panels_wrap)
 
         readout_panel.build("tr")
-        control_panel.build_joint_range_hud()
         control_panel.build("br")
 
         _setup_panel_persistence(panel_refs)

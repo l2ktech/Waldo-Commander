@@ -45,6 +45,7 @@ from waldo_commander.services.control_lease import (
 from waldo_commander.services.motion_recorder import motion_recorder
 from waldo_commander.services.programs import is_any_program_running
 from waldo_commander.operator_messages import operator_error
+from waldo_commander.robot_limits import effective_joint_limits_deg
 
 logger = logging.getLogger(__name__)
 
@@ -124,14 +125,6 @@ _ZDT_PARKING_JOINTS_DEG = (
     -37.0,
     90.0,
 )
-_ZDT_JOINT_LIMITS_DEG = (
-    (-117.4758195, 137.4069925),
-    (-137.0, -37.098302649122786),
-    (96.179468625, 243.83571870833333),
-    (-23.121469, 33.128531),
-    (-57.539281, 3.163844),
-    (7.174012142857137, 192.79901214285712),
-)
 _JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5
 
 
@@ -152,26 +145,6 @@ def _joint_has_remaining_travel(
     if direction == "pos":
         return value_deg < limit_deg - 1e-6
     raise ValueError(f"unsupported joint direction: {direction}")
-
-
-def _joint_range_state(
-    value_deg: float, lo_deg: float, hi_deg: float
-) -> dict[str, float]:
-    """Return normalized position and remaining travel for the joint-range HUD."""
-    if (
-        not all(math.isfinite(v) for v in (value_deg, lo_deg, hi_deg))
-        or hi_deg <= lo_deg
-    ):
-        return {
-            "position": 0.0,
-            "remaining_neg": 0.0,
-            "remaining_pos": 0.0,
-        }
-    return {
-        "position": max(0.0, min(1.0, (value_deg - lo_deg) / (hi_deg - lo_deg))),
-        "remaining_neg": max(0.0, value_deg - lo_deg),
-        "remaining_pos": max(0.0, hi_deg - value_deg),
-    }
 
 
 # SVG icon transform lookup: (vb_width, vb_height) -> default transform
@@ -1005,86 +978,6 @@ class ControlPanel:
 
         self._jog_end_wait_task: asyncio.Task | None = None
 
-    def build_joint_range_hud(self) -> None:
-        """Overlay live joint angles and soft-limit travel above the 3D scene."""
-        with (
-            ui.card()
-            .classes("joint-range-hud overlay-card")
-            .mark("joint-range-hud")
-        ):
-            with ui.row().classes("joint-range-hud-title items-center no-wrap"):
-                ui.icon("straighten", size="xs")
-                ui.label("关节可运动范围（软限位）")
-                ui.label("实时角度 / 剩余负向 · 正向行程").classes(
-                    "joint-range-hud-subtitle"
-                )
-
-            with ui.element("div").classes("joint-range-grid"):
-                for idx in range(self._n_joints):
-                    lo, hi = self._get_joint_limits(idx)
-                    with (
-                        ui.element("div")
-                        .classes("joint-range-item")
-                        .mark(f"joint-range-j{idx + 1}")
-                    ):
-                        with ui.row().classes(
-                            "joint-range-heading items-center justify-between no-wrap"
-                        ):
-                            ui.label(f"J{idx + 1}").classes("joint-range-name")
-                            current = ui.label("--°").classes("joint-range-current")
-
-                        progress = (
-                            ui.linear_progress(value=0.0, show_value=False)
-                            .props("rounded instant-feedback")
-                            .classes("joint-range-progress")
-                        )
-                        limits = ui.label(f"{lo:+.1f}° — {hi:+.1f}°").classes(
-                            "joint-range-limits"
-                        )
-                        remaining = ui.label("余 --° · --°").classes(
-                            "joint-range-remaining"
-                        )
-
-                        def _position(a, i=idx, lower=lo, upper=hi) -> float:
-                            if len(a) <= i:
-                                return 0.0
-                            return _joint_range_state(float(a[i]), lower, upper)[
-                                "position"
-                            ]
-
-                        def _current(a, i=idx) -> str:
-                            if len(a) <= i or not math.isfinite(float(a[i])):
-                                return "--°"
-                            return f"{float(a[i]):+.1f}°"
-
-                        def _remaining(a, i=idx, lower=lo, upper=hi) -> str:
-                            if len(a) <= i or not math.isfinite(float(a[i])):
-                                return "余 --° · --°"
-                            state = _joint_range_state(float(a[i]), lower, upper)
-                            return (
-                                f"余 −{state['remaining_neg']:.1f}°"
-                                f" · +{state['remaining_pos']:.1f}°"
-                            )
-
-                        progress.bind_value_from(
-                            waldoctl.commander.status.joints,
-                            "angles",
-                            backward=_position,
-                        )
-                        current.bind_text_from(
-                            waldoctl.commander.status.joints,
-                            "angles",
-                            backward=_current,
-                        )
-                        remaining.bind_text_from(
-                            waldoctl.commander.status.joints,
-                            "angles",
-                            backward=_remaining,
-                        )
-                        limits.tooltip(
-                            f"J{idx + 1} 软限位：{lo:+.3f}° 至 {hi:+.3f}°"
-                        )
-
     # ---- Helper methods ----
 
     async def _run_incremental_move(
@@ -1326,13 +1219,8 @@ class ControlPanel:
 
     def _get_joint_limits(self, i: int) -> tuple[float, float]:
         """Return (lo, hi) for joint i with safe defaults."""
-        if (
-            ui_state.active_robot.backend_package == "parol6_zdt_backend"
-            and 0 <= i < len(_ZDT_JOINT_LIMITS_DEG)
-        ):
-            return _ZDT_JOINT_LIMITS_DEG[i]
         try:
-            pos_deg = ui_state.active_robot.joints.limits.position.deg
+            pos_deg = effective_joint_limits_deg(ui_state.active_robot)
             if i < pos_deg.shape[0]:
                 return float(pos_deg[i, 0]), float(pos_deg[i, 1])
             return (-360.0, 360.0)
