@@ -87,6 +87,11 @@ def _is_recoverable_authority_error(error: BaseException) -> bool:
         for marker in (
             "current grant and lease",
             "connection-bound lease",
+            "request requires a live control session",
+            "arm grant is absent",
+            "illegal_transition",
+            "stale_command_generation",
+            "capability_digest_stale",
             "stop_already_pending",
             "stop is already pending",
         )
@@ -803,6 +808,12 @@ def _is_operator_stop_terminal(error: Exception) -> bool:
 def _benign_motion_rejection(error: BaseException) -> str | None:
     """Translate normal workspace boundaries into non-fault UI feedback."""
     message = str(error).upper().replace(" ", "_").replace("-", "_")
+    if "DEADLINE_EXPIRED" in message or "STREAM_UPDATE_BINDING_IS_STALE" in message:
+        return "本次连续操作已安全停止并释放控制。可直接再次按键继续操作。"
+    if "CONFIRMED_STOPPED" in message and (
+        "OVERSHOOT" in message or "ERROR_GROWTH" in message
+    ):
+        return "动作偏差增大，系统已确认安全停车。可反向移动或降低速度后继续。"
     if "SELF_COLLISION" in message or "COLLISION" in message:
         return "该方向已因预测碰撞停止，机械臂保持安全。请反向移动或调整姿态。"
     if "SOFT_LIMIT" in message or "JOINT_LIMIT" in message or "OUT_OF_RANGE" in message:
@@ -1012,11 +1023,14 @@ class ControlPanel:
                                 "fault reset returned no acknowledgement"
                             )
                         await operation()
-                        ui.notify(
-                            "控制授权已自动恢复，本次动作已重新执行。",
-                            color="positive",
-                            timeout=2500,
-                        )
+                        ui_client = getattr(self, "_ui_client", None)
+                        if ui_client is not None:
+                            with ui_client:
+                                ui.notify(
+                                    "控制授权已自动恢复，本次动作已重新执行。",
+                                    color="positive",
+                                    timeout=2500,
+                                )
                         return
                     except Exception as retry_error:
                         error = retry_error

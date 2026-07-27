@@ -147,6 +147,44 @@ def test_connection_bound_lease_rejection_is_automatically_recoverable() -> None
     )
 
 
+def test_stream_deadline_is_normal_safe_stop_feedback() -> None:
+    assert control._benign_motion_rejection(
+        RuntimeError("MOTION_LOOP_DEADLINE_EXPIRED")
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "arm rejected: ILLEGAL_TRANSITION",
+        "arm grant is absent",
+        "request requires a live control session",
+        "STALE_COMMAND_GENERATION",
+        "CAPABILITY_DIGEST_STALE",
+    ],
+)
+def test_session_state_rejections_are_automatically_recoverable(detail: str) -> None:
+    assert control._is_recoverable_authority_error(RuntimeError(detail))
+
+
+@pytest.mark.parametrize("detail_code", ["OVERSHOOT", "ERROR_GROWTH"])
+def test_confirmed_stop_control_deviation_is_nonfatal_feedback(
+    detail_code: str,
+) -> None:
+    assert control._benign_motion_rejection(
+        RuntimeError(
+            f"motion terminal outcome=FAILED detail_code={detail_code} "
+            "stop_outcome=CONFIRMED_STOPPED"
+        )
+    ) is not None
+    assert control._benign_motion_rejection(
+        RuntimeError(
+            f"motion terminal outcome=RESULT_UNKNOWN detail_code={detail_code} "
+            "stop_outcome=SENT_UNCONFIRMED; safe state unknown"
+        )
+    ) is None
+
+
 def test_zdt_urdf_base_and_j4_visual_directions_are_reversed_only_in_the_scene(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
