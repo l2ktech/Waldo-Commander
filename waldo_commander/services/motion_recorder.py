@@ -3,6 +3,7 @@
 import logging
 import re
 import time
+import ast
 from dataclasses import dataclass, fields as _dc_fields
 
 import numpy as np
@@ -22,6 +23,34 @@ logger = logging.getLogger(__name__)
 # constructor kwarg.
 _SHAPE_COMMON_FIELDS = ("name", "pose", "collision", "margin")
 _SHAPE_DEFAULT_POSE = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
+def _binds_rbt(text: str) -> bool:
+    """Return whether the program defines ``rbt`` in executable Python."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    return any(
+        isinstance(node, ast.Name)
+        and node.id == "rbt"
+        and isinstance(node.ctx, (ast.Store, ast.Param))
+        for node in ast.walk(tree)
+    )
+
+
+def _standalone_robot_snippet(snippet: str) -> str:
+    """Make a recorded ``rbt.*`` action runnable in an arbitrary program."""
+    package = ui_state.active_robot.backend_package
+    constructor = (
+        f"__import__({package!r}).RobotClient(host='127.0.0.1', port=5001)"
+        if package == "parol6_zdt_backend"
+        else f"__import__({package!r}).RobotClient()"
+    )
+    body = snippet.replace("rbt.", "_waldo_rbt.")
+    return f"with {constructor} as _waldo_rbt:\n" + "\n".join(
+        f"    {line}" for line in body.splitlines()
+    )
 
 
 def _shape_to_code(s) -> str:
@@ -464,6 +493,9 @@ class MotionRecorder:
         if ui_state.active_textarea:
             textarea = ui_state.active_textarea
             val = textarea.value or ""
+
+            if "rbt." in snippet and not _binds_rbt(val):
+                snippet = _standalone_robot_snippet(snippet)
 
             # Count lines before insertion for flash highlighting
             lines_before = len(val.splitlines())

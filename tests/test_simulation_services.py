@@ -197,7 +197,8 @@ class TestMotionRecorder:
         recorder.capture_current_pose()
 
         inserted_code = mock_textarea.value
-        assert "rbt.move_l([150.000, 250.000, 350.000" in inserted_code
+        assert "with __import__('parol6').RobotClient() as _waldo_rbt:" in inserted_code
+        assert "_waldo_rbt.move_l([150.000, 250.000, 350.000" in inserted_code
         assert "speed=" in inserted_code
         assert "accel=" in inserted_code
 
@@ -211,7 +212,16 @@ class TestMotionRecorder:
         recorder.capture_current_pose(move_type="joints")
 
         inserted_code = mock_textarea.value
-        assert "rbt.move_j([10.00, 20.00, 30.00, 40.00, 50.00, 60.00" in inserted_code
+        assert "_waldo_rbt.move_j([10.00, 20.00, 30.00, 40.00, 50.00, 60.00" in inserted_code
+
+    def test_capture_current_pose_keeps_existing_rbt_program_style(self, mock_textarea):
+        mock_textarea.value = "from parol6 import RobotClient\nrbt = RobotClient()\n"
+        set_robot_pose(150.0, 250.0, 350.0)
+
+        MotionRecorder().capture_current_pose()
+
+        assert "with __import__" not in mock_textarea.value
+        assert "rbt.move_l([150.000, 250.000, 350.000" in mock_textarea.value
 
     def test_toggle_recording_lifecycle(self, mock_textarea):
         """toggle_recording should toggle recording state on/off."""
