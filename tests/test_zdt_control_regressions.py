@@ -16,6 +16,7 @@ from waldo_commander.services.urdf_scene.urdf_scene import (
 from waldo_commander.services.urdf_scene.envelope_renderer import (
     _nearest_hull_boundary,
 )
+from waldo_commander import robot_limits
 from waldo_commander.robot_limits import effective_joint_limits_deg
 
 
@@ -148,7 +149,22 @@ def test_zdt_workspace_uses_deployed_soft_limits() -> None:
     )
     limits = effective_joint_limits_deg(robot)
     assert limits[1].tolist() == pytest.approx([-137.0, -37.098302649122786])
-    assert limits[4].tolist() == pytest.approx([-57.539281, 3.163844])
+    assert limits[4].tolist() == pytest.approx([-90.0, 3.163844])
+
+
+def test_zdt_workspace_reads_installed_joint_limit_file(
+    tmp_path, monkeypatch
+) -> None:
+    limits_path = tmp_path / "joint-limits.json"
+    limits_path.write_text(
+        '{"joint_limits_deg":[[-117,137],[-137,-37],[96,243],[-23,33],[-90,3],[7,192]],'
+        '"schema":"parol6-zdt/joint-limits/v1"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(robot_limits, "ZDT_JOINT_LIMITS_PATH", limits_path)
+    robot = SimpleNamespace(backend_package="parol6_zdt_backend")
+
+    assert effective_joint_limits_deg(robot)[4].tolist() == [-90.0, 3.0]
 
 
 def test_nearest_workspace_boundary_distance() -> None:

@@ -20,5 +20,5 @@ def test_zdt_joint_controls_use_installed_hardware_limits(monkeypatch) -> None:
     assert panel._get_joint_limits(1) == (-137.0, -37.098302649122786)
     assert panel._get_joint_limits(2) == (96.179468625, 243.83571870833333)
     assert panel._get_joint_limits(3) == (-23.121469, 33.128531)
-    assert panel._get_joint_limits(4) == (-57.539281, 3.163844)
+    assert panel._get_joint_limits(4) == (-90.0, 3.163844)
     assert panel._get_joint_limits(5) == (7.174012142857137, 192.79901214285712)
