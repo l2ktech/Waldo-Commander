@@ -2,6 +2,8 @@
 Description=Waldo Commander for PAROL6 ZDT
 Requires=parol6-zdt-worker.service
 After=network-online.target parol6-zdt-worker.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,12 +12,14 @@ Group=wzy
 WorkingDirectory=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander
 Environment=WALDO_READ_ONLY=1
 Environment=WALDO_EXCLUSIVE_START=1
+Environment=WALDO_PROCESS_WARM_WORKERS=2
 Environment=NUMBA_CACHE_DIR=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.cache/numba
+Environment=MPLCONFIGDIR=/var/lib/parol6-zdt/waldo/matplotlib
 Environment=WALDO_CACHE_DIR=/var/lib/parol6-zdt/waldo/workspace
 Environment=LD_LIBRARY_PATH=/opt/nvidia/nsight-systems/2025.5.2/host-linux-x64:/opt/parol6-zdt/current/lib/python3.12/site-packages/cmeel.prefix/lib
 ExecStart=/home/wzy/40-Projects/014-gw-5800x/projects/P14-004-Waldo-Commander/.venv/bin/waldo-commander --robot parol6_zdt --host 0.0.0.0 --port 8011 --log-level INFO
-Restart=on-failure
-RestartSec=2
+Restart=always
+RestartSec=3
 KillSignal=SIGINT
 NoNewPrivileges=true
 PrivateTmp=true

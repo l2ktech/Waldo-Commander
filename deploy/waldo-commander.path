@@ -1,0 +1,10 @@
+[Unit]
+Description=Start Waldo Commander when the PAROL6 worker socket is available
+After=parol6-zdt-worker.service
+
+[Path]
+PathExists=/run/parol6-zdt/worker.sock
+Unit=waldo-commander.service
+
+[Install]
+WantedBy=multi-user.target
