@@ -49,6 +49,18 @@ from waldo_commander.robot_limits import effective_joint_limits_deg
 
 logger = logging.getLogger(__name__)
 
+_WORKER_REBUILD_ERRORS = (
+    "axis_config_missing",
+    "stop_already_pending",
+    "current confirmed stop proof",
+    "operator stop is not confirmed",
+)
+
+
+def _requires_worker_rebuild(error: BaseException | str) -> bool:
+    normalized = str(error).lower()
+    return any(marker in normalized for marker in _WORKER_REBUILD_ERRORS)
+
 
 def _read_only_mode() -> bool:
     return os.environ.get("WALDO_READ_ONLY", "").lower() in {
@@ -2652,8 +2664,46 @@ class ControlPanel:
                     raise RuntimeError("fault reset returned no acknowledgement")
                 ui.notify("控制故障已复位，运动按钮已恢复。", color="positive")
             except Exception as error:
-                ui.notify(operator_error("控制恢复", error), color="negative")
-                logger.warning("Operator fault reset failed: %s", error)
+                if _requires_worker_rebuild(error):
+                    ui.notify(
+                        "停止已完成，正在自动恢复控制服务；页面会自动重连…",
+                        color="warning",
+                    )
+                    logger.warning(
+                        "stale STOP context detected, requesting bounded worker rebuild: %s",
+                        error,
+                    )
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "sudo",
+                            "systemctl",
+                            "start",
+                            "--no-block",
+                            "parol6-zdt-operator-recover.service",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=5
+                        )
+                        if proc.returncode != 0:
+                            detail = (stderr or stdout).decode(errors="replace").strip()
+                            raise RuntimeError(detail or "operator recovery service rejected")
+                        ui.notify(
+                            "恢复任务已受理，8011 与 RViz 将自动重连。",
+                            color="positive",
+                        )
+                    except Exception as restart_err:
+                        ui.notify(
+                            operator_error("服务重启", restart_err),
+                            color="negative",
+                        )
+                        logger.error(
+                            "Worker restart failed: %s", restart_err
+                        )
+                else:
+                    ui.notify(operator_error("控制恢复", error), color="negative")
+                    logger.warning("Operator fault reset failed: %s", error)
             finally:
                 self._set_incremental_busy(False)
                 if self._fault_reset_btn is not None:

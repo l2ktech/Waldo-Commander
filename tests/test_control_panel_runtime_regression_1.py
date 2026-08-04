@@ -124,6 +124,25 @@ def test_confirmed_post_disable_settle_timeout_is_not_a_page_fault() -> None:
     assert control._is_operator_stop_terminal(error) is True
 
 
+@pytest.mark.parametrize(
+    "error",
+    (
+        "safety rejected StopCompleted: AXIS_CONFIG_MISSING",
+        "safety rejected arm: STOP_ALREADY_PENDING",
+        "fault reset requires the current confirmed STOP proof",
+        "operator stop is not confirmed",
+    ),
+)
+def test_stale_stop_context_requests_bounded_worker_rebuild(error: str) -> None:
+    assert control._requires_worker_rebuild(error)
+
+
+def test_real_collision_fault_does_not_bypass_recovery_gate() -> None:
+    assert not control._requires_worker_rebuild(
+        "axis J5 reports a fault: stalled=True"
+    )
+
+
 def test_simplified_operator_stop_terminal_is_not_a_page_fault() -> None:
     error = RuntimeError(
         "OPERATOR_STOP_CONFIRMED: operator STOP confirmed before target completion"
