@@ -78,7 +78,7 @@ def test_cartesian_axis_lookup_uses_selected_reference_frames(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
+async def test_calibration_home_uses_confirmed_hardware_pose(monkeypatch) -> None:
     calls: list[tuple[list[float], dict[str, object]]] = []
 
     class Client:
@@ -98,21 +98,21 @@ async def test_parking_button_uses_confirmed_hardware_pose(monkeypatch) -> None:
     monkeypatch.setattr(control, "_norm_accel", lambda: 1.0)
     monkeypatch.setattr(control.ui, "notify", lambda *args, **kwargs: None)
 
-    await panel._execute_parking_move()
+    await panel._execute_calibration_home_move()
 
     assert calls == [
         (
-            list(control._ZDT_PARKING_JOINTS_DEG),
+            list(control._ZDT_CALIBRATION_HOME_JOINTS_DEG),
             {"speed": 0.5, "accel": 1.0, "wait": True, "timeout": 120.0},
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_zdt_hardware_home_routes_to_confirmed_parking(monkeypatch) -> None:
+async def test_zdt_hardware_home_routes_to_calibration_home(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     calls: list[str] = []
-    panel.confirm_parking_move = lambda: calls.append("parking")
+    panel.confirm_calibration_home_move = lambda: calls.append("calibration-home")
 
     monkeypatch.setattr(
         type(control.ui_state.active_robot),
@@ -124,7 +124,7 @@ async def test_zdt_hardware_home_routes_to_confirmed_parking(monkeypatch) -> Non
 
     await panel.send_home()
 
-    assert calls == ["parking"]
+    assert calls == ["calibration-home"]
 
 
 def test_joint_direction_remains_available_for_partial_final_step() -> None:
@@ -940,7 +940,7 @@ async def test_cartesian_click_waits_for_safe_terminal_and_forwards_settings(
 
 
 @pytest.mark.asyncio
-async def test_parking_success_notification_uses_page_client_context(monkeypatch) -> None:
+async def test_calibration_home_success_notification_uses_page_client_context(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     panel._incremental_move_lock = asyncio.Lock()
     panel._movement_allowed = lambda **_kwargs: True
@@ -972,9 +972,9 @@ async def test_parking_success_notification_uses_page_client_context(monkeypatch
 
     monkeypatch.setattr(control.ui, "notify", notify)
 
-    await panel._execute_parking_move()
+    await panel._execute_calibration_home_move()
 
-    assert notifications == ["机械臂已到达停车位。"]
+    assert notifications == ["机械臂已到达校准 Home。"]
 
 
 @pytest.mark.asyncio
