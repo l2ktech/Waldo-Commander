@@ -143,6 +143,31 @@ def test_real_collision_fault_does_not_bypass_recovery_gate() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_digital_reset_uses_bounded_rebuild_for_stale_stop_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def stop() -> int:
+        raise RuntimeError("safety rejected StopCompleted: AXIS_CONFIG_MISSING")
+
+    requested: list[bool] = []
+
+    async def rebuild() -> None:
+        requested.append(True)
+
+    manager = control._EStopManager(SimpleNamespace(stop=stop), lambda: None)
+    manager._digital_active = True
+    monkeypatch.setattr(control, "require_browser_control", lambda _cid: True)
+    monkeypatch.setattr(control.ui, "notify", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(control.waldoctl.commander.status.io, "estop", 1)
+    monkeypatch.setattr(control, "_request_bounded_worker_rebuild", rebuild)
+
+    await manager.reset_digital_stop()
+
+    assert requested == [True]
+    assert manager._digital_active is True
+
+
 def test_simplified_operator_stop_terminal_is_not_a_page_fault() -> None:
     error = RuntimeError(
         "OPERATOR_STOP_CONFIRMED: operator STOP confirmed before target completion"
