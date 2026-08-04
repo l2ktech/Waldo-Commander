@@ -115,16 +115,15 @@ _AXIS_ORDER = (
 )
 _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 
-# Operator-confirmed calibration HOME captured from one fresh state.get
-# snapshot while the physical arm and display model were aligned on 2026-08-04.
-# These are controller/canonical motion coordinates; visual offsets remain
-# separate and must never be added to this MoveJ target.
+# Operator-confirmed calibration HOME in the 2026-08-04 signed-axis coordinate
+# epoch. J2/J3/J5 were migrated at the 01 source; no display offset may be
+# added to this canonical MoveJ target.
 _ZDT_CALIBRATION_HOME_JOINTS_DEG = (
     0.0102996826171875,
-    -145.31943873355263,
-    96.01783752441406,
+    -115.31943873355263,
+    106.01783752441406,
     -0.087890625,
-    -26.873931884765625,
+    -41.873931884765625,
     90.01020159040179,
 )
 _JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5

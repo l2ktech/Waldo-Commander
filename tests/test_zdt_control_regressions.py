@@ -79,6 +79,16 @@ def test_cartesian_axis_lookup_uses_selected_reference_frames(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_calibration_home_uses_confirmed_hardware_pose(monkeypatch) -> None:
+    assert control._ZDT_CALIBRATION_HOME_JOINTS_DEG == pytest.approx(
+        (
+            0.0102996826171875,
+            -115.31943873355263,
+            106.01783752441406,
+            -0.087890625,
+            -41.873931884765625,
+            90.01020159040179,
+        )
+    )
     calls: list[tuple[list[float], dict[str, object]]] = []
 
     class Client:
