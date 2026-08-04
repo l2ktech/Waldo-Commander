@@ -62,6 +62,22 @@ def _requires_worker_rebuild(error: BaseException | str) -> bool:
     return any(marker in normalized for marker in _WORKER_REBUILD_ERRORS)
 
 
+async def _request_bounded_worker_rebuild() -> None:
+    proc = await asyncio.create_subprocess_exec(
+        "sudo",
+        "systemctl",
+        "start",
+        "--no-block",
+        "parol6-zdt-operator-recover.service",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+    if proc.returncode != 0:
+        detail = (stderr or stdout).decode(errors="replace").strip()
+        raise RuntimeError(detail or "operator recovery service rejected")
+
+
 def _read_only_mode() -> bool:
     return os.environ.get("WALDO_READ_ONLY", "").lower() in {
         "1",
@@ -280,8 +296,29 @@ class _EStopManager:
             self.close()
             ui.notify("急停已复位，运动按钮已恢复。", color="positive")
         except Exception as error:
-            ui.notify(operator_error("急停复位", error), color="negative")
-            logger.warning("Reset after digital E-STOP failed: %s", error)
+            if _requires_worker_rebuild(error):
+                ui.notify(
+                    "停止已完成，正在自动恢复控制服务；页面会自动重连…",
+                    color="warning",
+                )
+                logger.warning(
+                    "digital reset found stale STOP context; requesting bounded rebuild: %s",
+                    error,
+                )
+                try:
+                    await _request_bounded_worker_rebuild()
+                    ui.notify(
+                        "恢复任务已受理，8011 与 RViz 将自动重连。",
+                        color="positive",
+                    )
+                except Exception as restart_error:
+                    ui.notify(
+                        operator_error("服务重启", restart_error), color="negative"
+                    )
+                    logger.error("Worker rebuild request failed: %s", restart_error)
+            else:
+                ui.notify(operator_error("急停复位", error), color="negative")
+                logger.warning("Reset after digital E-STOP failed: %s", error)
         finally:
             self._reset_in_progress = False
             if self._reset_btn is not None and self._digital_active:
@@ -2674,21 +2711,7 @@ class ControlPanel:
                         error,
                     )
                     try:
-                        proc = await asyncio.create_subprocess_exec(
-                            "sudo",
-                            "systemctl",
-                            "start",
-                            "--no-block",
-                            "parol6-zdt-operator-recover.service",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        stdout, stderr = await asyncio.wait_for(
-                            proc.communicate(), timeout=5
-                        )
-                        if proc.returncode != 0:
-                            detail = (stderr or stdout).decode(errors="replace").strip()
-                            raise RuntimeError(detail or "operator recovery service rejected")
+                        await _request_bounded_worker_rebuild()
                         ui.notify(
                             "恢复任务已受理，8011 与 RViz 将自动重连。",
                             color="positive",
