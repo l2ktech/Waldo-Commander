@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import asyncio
 
 import pytest
 
@@ -166,6 +167,25 @@ async def test_digital_reset_uses_bounded_rebuild_for_stale_stop_context(
 
     assert requested == [True]
     assert manager._digital_active is True
+
+
+@pytest.mark.asyncio
+async def test_hold_watchdog_releases_input_when_browser_mouseup_is_lost() -> None:
+    handler = control._ClickHoldHandler(0.001, max_hold_s=0.01)
+    events: list[object] = []
+
+    await handler.on_change(
+        "J3+",
+        True,
+        on_click=lambda: events.append("click"),
+        on_hold_start=lambda: events.append("hold"),
+        on_release=lambda was_holding: events.append(was_holding),
+    )
+    await asyncio.sleep(0.03)
+
+    assert events == ["hold", True]
+    assert not handler.any_active
+    handler.cleanup()
 
 
 def test_simplified_operator_stop_terminal_is_not_a_page_fault() -> None:

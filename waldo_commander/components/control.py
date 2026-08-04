@@ -724,9 +724,11 @@ class _ClickHoldHandler:
     Domain-specific behavior is injected via callbacks to on_change().
     """
 
-    def __init__(self, threshold_s: float) -> None:
+    def __init__(self, threshold_s: float, max_hold_s: float = 2.0) -> None:
         self._threshold_s = threshold_s
+        self._max_hold_s = max_hold_s
         self._hold_timers: dict[Any, asyncio.Task[None]] = {}
+        self._hold_watchdogs: dict[Any, asyncio.Task[None]] = {}
         self._holding_active: set[Any] = set()
 
     def is_holding(self, key: Any) -> bool:
@@ -741,6 +743,9 @@ class _ClickHoldHandler:
         tm = self._hold_timers.pop(key, None)
         if tm:
             tm.cancel()
+        watchdog = self._hold_watchdogs.pop(key, None)
+        if watchdog:
+            watchdog.cancel()
         self._holding_active.discard(key)
 
     async def on_change(
@@ -763,9 +768,7 @@ class _ClickHoldHandler:
         """
         if is_pressed:
             # Cancel any existing timer for this key
-            tm_prev = self._hold_timers.pop(key, None)
-            if tm_prev:
-                tm_prev.cancel()
+            self.cancel_key(key)
 
             async def _start_hold() -> None:
                 await asyncio.sleep(self._threshold_s)
@@ -773,11 +776,29 @@ class _ClickHoldHandler:
                 on_hold_start()
                 self._hold_timers.pop(key, None)
 
+                async def _expire_hold() -> None:
+                    await asyncio.sleep(self._max_hold_s)
+                    if key not in self._holding_active:
+                        return
+                    logger.warning(
+                        "Jog hold watchdog released stale input key=%r after %.1fs",
+                        key,
+                        self._max_hold_s,
+                    )
+                    self._holding_active.discard(key)
+                    self._hold_watchdogs.pop(key, None)
+                    on_release(True)
+
+                self._hold_watchdogs[key] = asyncio.create_task(_expire_hold())
+
             self._hold_timers[key] = asyncio.create_task(_start_hold())
             return
 
         # Release path
         tm = self._hold_timers.pop(key, None)
+        watchdog = self._hold_watchdogs.pop(key, None)
+        if watchdog:
+            watchdog.cancel()
         was_holding = key in self._holding_active
 
         if tm and not tm.done():
@@ -798,7 +819,10 @@ class _ClickHoldHandler:
     def cleanup(self) -> None:
         for tm in self._hold_timers.values():
             tm.cancel()
+        for watchdog in self._hold_watchdogs.values():
+            watchdog.cancel()
         self._hold_timers.clear()
+        self._hold_watchdogs.clear()
         self._holding_active.clear()
 
 
