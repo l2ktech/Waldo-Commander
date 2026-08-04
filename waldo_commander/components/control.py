@@ -115,15 +115,17 @@ _AXIS_ORDER = (
 )
 _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 
-# Operator-confirmed physical standard parking pose captured after a manual
-# power-off placement and fresh six-axis readback on 2026-07-26.
-_ZDT_PARKING_JOINTS_DEG = (
-    0.0,
-    -135.0,
-    110.0,
-    0.0,
-    -37.0,
-    90.0,
+# Operator-confirmed calibration HOME captured from one fresh state.get
+# snapshot while the physical arm and display model were aligned on 2026-08-04.
+# These are controller/canonical motion coordinates; visual offsets remain
+# separate and must never be added to this MoveJ target.
+_ZDT_CALIBRATION_HOME_JOINTS_DEG = (
+    0.0102996826171875,
+    -145.31943873355263,
+    96.01783752441406,
+    -0.087890625,
+    -26.873931884765625,
+    90.01020159040179,
 )
 _JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5
 
@@ -2419,18 +2421,18 @@ class ControlPanel:
             return
 
         # The ZDT arm has no separate signed referencing sequence.  Its
-        # operator-confirmed parking pose is the canonical HOME target, so the
-        # page must not dispatch a different backend home coordinate.
+        # operator-confirmed calibration pose is the canonical HOME target, so
+        # the page must not dispatch a different backend home coordinate.
         if (
             ui_state.active_robot.backend_package == "parol6_zdt_backend"
             and not waldoctl.commander.status.simulator_active
         ):
-            self.confirm_parking_move()
+            self.confirm_calibration_home_move()
             return
 
         if not _home_command_available():
             ui.notify(
-                "Home 尚未完成当前机械臂真机签收，已禁用。处理方法：请使用已确认的停车位按钮；完成 HOME receipt 后再由维护人员开放。",
+                "Home 尚未完成当前机械臂真机签收，已禁用。完成校准 Home receipt 后再由维护人员开放。",
                 color="warning",
                 timeout=7000,
             )
@@ -2448,14 +2450,14 @@ class ControlPanel:
             logger.error("HOME failed: %s", e)
             ui.notify(operator_error("回零", e), color="negative", timeout=6000)
 
-    async def _execute_parking_move(self) -> None:
-        """Move to the operator-confirmed ZDT parking pose."""
+    async def _execute_calibration_home_move(self) -> None:
+        """Move to the operator-confirmed ZDT calibration HOME pose."""
         if not self._movement_allowed():
             return
 
         async def move() -> None:
             await self.client.move_j(
-                list(_ZDT_PARKING_JOINTS_DEG),
+                list(_ZDT_CALIBRATION_HOME_JOINTS_DEG),
                 speed=_norm_speed(),
                 accel=_norm_accel(),
                 wait=True,
@@ -2464,12 +2466,12 @@ class ControlPanel:
             ui_client = getattr(self, "_ui_client", None)
             if ui_client is not None:
                 with ui_client:
-                    ui.notify("机械臂已到达停车位。", color="positive")
+                    ui.notify("机械臂已到达校准 Home。", color="positive")
 
         await self._run_incremental_move("joint", move)
 
-    def confirm_parking_move(self) -> None:
-        """Confirm a multi-axis parking move before dispatching it."""
+    def confirm_calibration_home_move(self) -> None:
+        """Confirm a multi-axis calibration HOME move before dispatching it."""
         if waldoctl.commander.status.editing_mode:
             ui.notify("请先点击红叉退出姿态对齐模式。", color="warning")
             return
@@ -2480,22 +2482,22 @@ class ControlPanel:
 
         def execute() -> None:
             dialog.close()
-            _safe_task(self._execute_parking_move())
+            _safe_task(self._execute_calibration_home_move())
 
         with dialog, ui.card().classes("min-w-[500px]"):
-            ui.label("返回停车位？").classes("text-lg font-medium")
+            ui.label("回到校准 Home？").classes("text-lg font-medium")
             ui.label(
                 "机械臂将以页面当前速度和加速度执行六轴 MoveJ。运动期间可随时按 STOP 或急停。"
             ).classes("text-sm text-gray-400")
             ui.label(
                 ", ".join(
                     f"J{i + 1}={angle:.2f}°"
-                    for i, angle in enumerate(_ZDT_PARKING_JOINTS_DEG)
+                    for i, angle in enumerate(_ZDT_CALIBRATION_HOME_JOINTS_DEG)
                 )
             ).classes("font-mono text-xs")
             with ui.row().classes("justify-end w-full"):
                 ui.button("取消", on_click=dialog.close).props("flat")
-                ui.button("返回停车位", icon="garage", on_click=execute).props(
+                ui.button("回到校准 Home", icon="home", on_click=execute).props(
                     "color=teal-6"
                 )
         dialog.open()
@@ -3283,14 +3285,8 @@ class ControlPanel:
             if _home_command_available():
                 home_btn.tooltip("Home (H)")
             else:
-                home_btn.props("disable").tooltip(
-                    "Home 尚未完成真机签收；请使用旁边已确认的停车位按钮"
-                )
+                home_btn.props("disable").tooltip("校准 Home 尚未完成真机签收")
             home_btn.mark("btn-home")
-
-            ui.button(icon="garage", on_click=self.confirm_parking_move).props(
-                "dense round unelevated color=blue-grey-6"
-            ).tooltip("返回已确认停车位").mark("btn-parking")
 
             robot_btn = (
                 ui.button(
