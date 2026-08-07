@@ -78,11 +78,23 @@ def test_cartesian_axis_lookup_uses_selected_reference_frames(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_multiturn_home_restore_writes_fixed_request_path(
+    monkeypatch, tmp_path
+) -> None:
+    request_path = tmp_path / "home-restore.request"
+    monkeypatch.setattr(control, "_HOME_RESTORE_REQUEST_PATH", request_path)
+
+    await control._request_multiturn_home_restore()
+
+    assert int(request_path.read_text(encoding="utf-8")) > 0
+
+
+@pytest.mark.asyncio
 async def test_calibration_home_uses_confirmed_hardware_pose(monkeypatch) -> None:
     assert control._ZDT_CALIBRATION_HOME_JOINTS_DEG == pytest.approx(
         (
             0.0102996826171875,
-            -115.31943873355263,
+            -95.31943873355263,
             106.01783752441406,
             -0.087890625,
             -41.873931884765625,

@@ -7,6 +7,7 @@ import os
 import time
 import re
 import math
+from pathlib import Path
 from functools import partial
 from typing import Any, Callable
 import importlib.resources as pkg_resources
@@ -49,6 +50,10 @@ from waldo_commander.robot_limits import effective_joint_limits_deg
 
 logger = logging.getLogger(__name__)
 
+_HOME_RESTORE_REQUEST_PATH = Path(
+    "/var/lib/parol6-zdt/waldo/home-restore.request"
+)
+
 _WORKER_REBUILD_ERRORS = (
     "axis_config_missing",
     "stop_already_pending",
@@ -64,7 +69,6 @@ def _requires_worker_rebuild(error: BaseException | str) -> bool:
 
 async def _request_bounded_worker_rebuild() -> None:
     proc = await asyncio.create_subprocess_exec(
-        "sudo",
         "systemctl",
         "start",
         "--no-block",
@@ -76,6 +80,15 @@ async def _request_bounded_worker_rebuild() -> None:
     if proc.returncode != 0:
         detail = (stderr or stdout).decode(errors="replace").strip()
         raise RuntimeError(detail or "operator recovery service rejected")
+
+
+async def _request_multiturn_home_restore() -> None:
+    stamp = f"{time.time_ns()}\n"
+    await asyncio.to_thread(
+        _HOME_RESTORE_REQUEST_PATH.write_text,
+        stamp,
+        encoding="utf-8",
+    )
 
 
 def _read_only_mode() -> bool:
@@ -148,7 +161,7 @@ _AXIS_MAP = {"X": 0, "Y": 1, "Z": 2, "RX": 3, "RY": 4, "RZ": 5}
 # added to this canonical MoveJ target.
 _ZDT_CALIBRATION_HOME_JOINTS_DEG = (
     0.0102996826171875,
-    -115.31943873355263,
+    -95.31943873355263,
     106.01783752441406,
     -0.087890625,
     -41.873931884765625,
@@ -2574,6 +2587,68 @@ class ControlPanel:
                 )
         dialog.open()
 
+    async def _execute_multiturn_home_restore(self) -> None:
+        """Start the no-motion 0x31 multi-turn coordinate restore service."""
+        ui_client = getattr(self, "_ui_client", None)
+        try:
+            await _request_multiturn_home_restore()
+        except Exception as error:
+            logger.error("No-motion multi-turn Home restore failed: %s", error)
+            if ui_client is not None:
+                with ui_client:
+                    ui.notify(
+                        operator_error("不运动坐标重建", error),
+                        color="negative",
+                        timeout=7000,
+                    )
+            return
+        if ui_client is not None:
+            with ui_client:
+                ui.notify(
+                    "不运动坐标重建已受理：将读取当前 0x31 精确角度，8011 会短暂重连。",
+                    color="positive",
+                    timeout=6000,
+                )
+
+    def confirm_multiturn_home_restore(self) -> None:
+        """Confirm that the arm is near Home before selecting encoder turns."""
+        if (
+            ui_state.active_robot.backend_package != "parol6_zdt_backend"
+            or waldoctl.commander.status.simulator_active
+        ):
+            ui.notify("该功能只用于 ZDT 真机。", color="warning")
+            return
+
+        dialog = ui.dialog().props("persistent")
+
+        def execute() -> None:
+            dialog.close()
+            _safe_task(self._execute_multiturn_home_restore())
+
+        with dialog, ui.card().classes("min-w-[540px]"):
+            ui.label("用当前位置重建多圈坐标？").classes("text-lg font-medium")
+            ui.label(
+                "请先把机械臂手动放到校准 Home 附近。标准 Home 只用于选择电机圈数，"
+                "最终角度由当前 0x31 精确读数确定；不会发送任何运动命令。"
+            ).classes("text-sm text-gray-400")
+            ui.label(
+                "仅重建 J1/J2/J3/J5/J6；单圈范围内的 J4 配置完全不修改。"
+            ).classes("text-sm text-amber-500")
+            ui.label(
+                ", ".join(
+                    f"J{i + 1}≈{angle:.2f}°"
+                    for i, angle in enumerate(_ZDT_CALIBRATION_HOME_JOINTS_DEG)
+                )
+            ).classes("font-mono text-xs")
+            with ui.row().classes("justify-end w-full"):
+                ui.button("取消", on_click=dialog.close).props("flat")
+                ui.button(
+                    "不运动重建",
+                    icon="settings_backup_restore",
+                    on_click=execute,
+                ).props("color=indigo-6")
+        dialog.open()
+
     def _is_urdf_scene_valid(self) -> bool:
         """Check if urdf_scene exists and its client is still valid."""
         if not ui_state.urdf_scene:
@@ -3383,6 +3458,14 @@ class ControlPanel:
             else:
                 home_btn.props("disable").tooltip("校准 Home 尚未完成真机签收")
             home_btn.mark("btn-home")
+
+            if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+                restore_btn = ui.button(
+                    icon="settings_backup_restore",
+                    on_click=self.confirm_multiturn_home_restore,
+                ).props("dense round unelevated color=indigo-6")
+                restore_btn.tooltip("当前位置恢复多圈坐标（不运动）")
+                restore_btn.mark("btn-home-coordinate-restore")
 
             robot_btn = (
                 ui.button(
