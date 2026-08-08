@@ -145,6 +145,18 @@ def test_real_collision_fault_does_not_bypass_recovery_gate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bounded_worker_rebuild_writes_root_owned_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request = tmp_path / "operator-recover.request"
+    monkeypatch.setattr(control, "_OPERATOR_RECOVERY_REQUEST_PATH", request)
+
+    await control._request_bounded_worker_rebuild()
+
+    assert request.read_text(encoding="utf-8").strip().isdigit()
+
+
+@pytest.mark.asyncio
 async def test_digital_reset_uses_bounded_rebuild_for_stale_stop_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
