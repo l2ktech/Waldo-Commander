@@ -180,6 +180,19 @@ _ZDT_PRE_GRASP_JOINTS_DEG = (
     -75.18722534179688,
     89.96939522879464,
 )
+
+# Operator-selected global-observation waypoint, captured from the
+# authoritative 01 status while the arm was stopped on 2026-08-07.  These are
+# canonical joint coordinates; the 8011 scene-only J2 visual compensation
+# never applies to a MoveJ target.
+_ZDT_GLOBAL_OBSERVATION_JOINTS_DEG = (
+    0.06351470947265625,
+    -74.43654913651316,
+    194.2101287841797,
+    0.07965087890625,
+    -95.97610473632812,
+    89.94428362165179,
+)
 _JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5
 
 
@@ -2627,6 +2640,33 @@ class ControlPanel:
             return
         _safe_task(self._execute_pre_grasp_move())
 
+    async def _execute_global_observation_move(self) -> None:
+        """Move to the operator-selected ZDT global-observation waypoint."""
+        if not self._movement_allowed():
+            return
+
+        async def move() -> None:
+            await self.client.move_j(
+                list(_ZDT_GLOBAL_OBSERVATION_JOINTS_DEG),
+                speed=_norm_speed(),
+                accel=_norm_accel(),
+                wait=True,
+                timeout=self.EXACT_MOVE_TIMEOUT_S,
+            )
+            ui_client = getattr(self, "_ui_client", None)
+            if ui_client is not None:
+                with ui_client:
+                    ui.notify("机械臂已到达全局观察位。", color="positive")
+
+        await self._run_incremental_move("global-observation", move)
+
+    def send_global_observation(self) -> None:
+        """Start the bounded move to the saved global-observation waypoint."""
+        if waldoctl.commander.status.editing_mode:
+            ui.notify("请先点击红叉退出姿态对齐模式。", color="warning")
+            return
+        _safe_task(self._execute_global_observation_move())
+
     async def _execute_multiturn_home_restore(self) -> None:
         """Start the no-motion 0x31 multi-turn coordinate restore service."""
         ui_client = getattr(self, "_ui_client", None)
@@ -3490,50 +3530,63 @@ class ControlPanel:
     def _build_action_row(self) -> None:
         """Build the action row: Home, Robot/Sim toggle, gizmo controls, camera reset, step input."""
         with ui.row().classes("gap-2 items-center w-full flex-wrap"):
-            home_btn = ui.button(icon="home", on_click=self.send_home).props(
-                "dense round unelevated color=teal-6"
-            )
-            if _home_command_available():
-                home_btn.tooltip("Home (H)")
-            else:
-                home_btn.props("disable").tooltip("校准 Home 尚未完成真机签收")
-            home_btn.mark("btn-home")
+            with ui.row().classes("gap-2 items-center w-full no-wrap"):
+                with ui.row().classes("gap-2 items-center no-wrap"):
+                    home_btn = ui.button(icon="home", on_click=self.send_home).props(
+                        "dense round unelevated color=teal-6"
+                    )
+                    if _home_command_available():
+                        home_btn.tooltip("Home (H)")
+                    else:
+                        home_btn.props("disable").tooltip("校准 Home 尚未完成真机签收")
+                    home_btn.mark("btn-home")
 
-            if ui_state.active_robot.backend_package == "parol6_zdt_backend":
-                restore_btn = ui.button(
-                    icon="settings_backup_restore",
-                    on_click=self.confirm_multiturn_home_restore,
-                ).props("dense round unelevated color=indigo-6")
-                restore_btn.tooltip("当前位置恢复多圈坐标（不运动）")
-                restore_btn.mark("btn-home-coordinate-restore")
+                    if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+                        pre_grasp_btn = ui.button(
+                            icon="near_me",
+                            on_click=self.send_pre_grasp,
+                        ).props("dense round unelevated color=orange-7")
+                        pre_grasp_btn.tooltip("一键前往保存的准备抓取位")
+                        pre_grasp_btn.mark("btn-pre-grasp")
 
-                pre_grasp_btn = ui.button(
-                    icon="near_me",
-                    on_click=self.send_pre_grasp,
-                ).props("dense round unelevated color=orange-7")
-                pre_grasp_btn.tooltip("一键前往保存的准备抓取位")
-                pre_grasp_btn.mark("btn-pre-grasp")
+                        global_observation_btn = ui.button(
+                            icon="public",
+                            on_click=self.send_global_observation,
+                        ).props("dense round unelevated color=blue-7")
+                        global_observation_btn.tooltip("一键前往保存的全局观察位")
+                        global_observation_btn.mark("btn-global-observation")
 
-            robot_btn = (
-                ui.button(
-                    icon="precision_manufacturing",
-                    on_click=self.on_toggle_sim,
-                )
-                .props("round unelevated dense")
-            )
-            robot_btn.mark("btn-robot-toggle")
-            if ui_state.active_robot.backend_package == "parol6_zdt_backend":
-                robot_btn.tooltip("打开隔离的 Simulator（真机连接保持不变）")
-            elif os.environ.get("WALDO_SIMULATOR_ONLY", "").lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }:
-                robot_btn.tooltip("返回 SocketCAN Robot 控制页面")
-            else:
-                robot_btn.tooltip("Robot/Simulator")
-            self._robot_btn = robot_btn
+                ui.space()
+
+                with ui.row().classes("gap-2 items-center no-wrap"):
+                    if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+                        restore_btn = ui.button(
+                            icon="settings_backup_restore",
+                            on_click=self.confirm_multiturn_home_restore,
+                        ).props("dense round unelevated color=indigo-6")
+                        restore_btn.tooltip("当前位置恢复多圈坐标（不运动）")
+                        restore_btn.mark("btn-home-coordinate-restore")
+
+                    robot_btn = (
+                        ui.button(
+                            icon="precision_manufacturing",
+                            on_click=self.on_toggle_sim,
+                        )
+                        .props("round unelevated dense")
+                    )
+                    robot_btn.mark("btn-robot-toggle")
+                    if ui_state.active_robot.backend_package == "parol6_zdt_backend":
+                        robot_btn.tooltip("打开隔离的 Simulator（真机连接保持不变）")
+                    elif os.environ.get("WALDO_SIMULATOR_ONLY", "").lower() in {
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    }:
+                        robot_btn.tooltip("返回 SocketCAN Robot 控制页面")
+                    else:
+                        robot_btn.tooltip("Robot/Simulator")
+                    self._robot_btn = robot_btn
 
             selected = {"value": "Move"}
             buttons: dict[str, ui.button] = {}

@@ -159,6 +159,7 @@ async def test_core_ui_markers_present(user: User) -> None:
     await user.should_see(marker="btn-home")
     await user.should_see(marker="btn-home-coordinate-restore")
     await user.should_see(marker="btn-pre-grasp")
+    await user.should_see(marker="btn-global-observation")
     await user.should_see(marker="btn-robot-toggle")
     await user.should_see(marker="btn-estop")
 
