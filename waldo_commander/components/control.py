@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 _HOME_RESTORE_REQUEST_PATH = Path(
     "/var/lib/parol6-zdt/waldo/home-restore.request"
 )
+_OPERATOR_RECOVERY_REQUEST_PATH = Path(
+    "/var/lib/parol6-zdt/waldo/operator-recover.request"
+)
 
 _WORKER_REBUILD_ERRORS = (
     "axis_config_missing",
@@ -68,18 +71,13 @@ def _requires_worker_rebuild(error: BaseException | str) -> bool:
 
 
 async def _request_bounded_worker_rebuild() -> None:
-    proc = await asyncio.create_subprocess_exec(
-        "systemctl",
-        "start",
-        "--no-block",
-        "parol6-zdt-operator-recover.service",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    """Ask the root-owned Path unit to rebuild a proven-idle control chain."""
+    stamp = f"{time.time_ns()}\n"
+    await asyncio.to_thread(
+        _OPERATOR_RECOVERY_REQUEST_PATH.write_text,
+        stamp,
+        encoding="utf-8",
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-    if proc.returncode != 0:
-        detail = (stderr or stdout).decode(errors="replace").strip()
-        raise RuntimeError(detail or "operator recovery service rejected")
 
 
 async def _request_multiturn_home_restore() -> None:
