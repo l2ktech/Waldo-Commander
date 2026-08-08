@@ -131,6 +131,47 @@ async def test_calibration_home_uses_confirmed_hardware_pose(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_pre_grasp_uses_saved_current_hardware_pose(monkeypatch) -> None:
+    assert control._ZDT_PRE_GRASP_JOINTS_DEG == pytest.approx(
+        (
+            0.1338958740234375,
+            -73.07270250822368,
+            165.7317352294922,
+            0.08514404296875,
+            -75.18722534179688,
+            89.96939522879464,
+        )
+    )
+    calls: list[tuple[list[float], dict[str, object]]] = []
+
+    class Client:
+        async def move_j(self, angles, **kwargs):
+            calls.append((angles, kwargs))
+            return 1
+
+    panel = object.__new__(control.ControlPanel)
+    panel.client = Client()
+    panel._movement_allowed = lambda: True
+
+    async def run(_label, operation):
+        await operation()
+
+    panel._run_incremental_move = run
+    monkeypatch.setattr(control, "_norm_speed", lambda: 0.5)
+    monkeypatch.setattr(control, "_norm_accel", lambda: 1.0)
+    monkeypatch.setattr(control.ui, "notify", lambda *args, **kwargs: None)
+
+    await panel._execute_pre_grasp_move()
+
+    assert calls == [
+        (
+            list(control._ZDT_PRE_GRASP_JOINTS_DEG),
+            {"speed": 0.5, "accel": 1.0, "wait": True, "timeout": 120.0},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_zdt_hardware_home_routes_to_calibration_home(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
     calls: list[str] = []
