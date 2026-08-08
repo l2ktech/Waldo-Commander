@@ -2620,37 +2620,12 @@ class ControlPanel:
 
         await self._run_incremental_move("pre-grasp", move)
 
-    def confirm_pre_grasp_move(self) -> None:
-        """Confirm the bounded move to the saved pre-grasp waypoint."""
+    def send_pre_grasp(self) -> None:
+        """Start the bounded move to the saved pre-grasp waypoint."""
         if waldoctl.commander.status.editing_mode:
             ui.notify("请先点击红叉退出姿态对齐模式。", color="warning")
             return
-        if not self._movement_allowed():
-            return
-
-        dialog = ui.dialog().props("persistent")
-
-        def execute() -> None:
-            dialog.close()
-            _safe_task(self._execute_pre_grasp_move())
-
-        with dialog, ui.card().classes("min-w-[500px]"):
-            ui.label("前往准备抓取位？").classes("text-lg font-medium")
-            ui.label(
-                "机械臂将以页面当前速度和加速度执行六轴 MoveJ。运动期间可随时按 STOP 或急停。"
-            ).classes("text-sm text-gray-400")
-            ui.label(
-                ", ".join(
-                    f"J{i + 1}={angle:.2f}°"
-                    for i, angle in enumerate(_ZDT_PRE_GRASP_JOINTS_DEG)
-                )
-            ).classes("font-mono text-xs")
-            with ui.row().classes("justify-end w-full"):
-                ui.button("取消", on_click=dialog.close).props("flat")
-                ui.button("前往准备抓取位", icon="near_me", on_click=execute).props(
-                    "color=orange-7"
-                )
-        dialog.open()
+        _safe_task(self._execute_pre_grasp_move())
 
     async def _execute_multiturn_home_restore(self) -> None:
         """Start the no-motion 0x31 multi-turn coordinate restore service."""
@@ -3534,9 +3509,9 @@ class ControlPanel:
 
                 pre_grasp_btn = ui.button(
                     icon="near_me",
-                    on_click=self.confirm_pre_grasp_move,
+                    on_click=self.send_pre_grasp,
                 ).props("dense round unelevated color=orange-7")
-                pre_grasp_btn.tooltip("前往保存的准备抓取位")
+                pre_grasp_btn.tooltip("一键前往保存的准备抓取位")
                 pre_grasp_btn.mark("btn-pre-grasp")
 
             robot_btn = (

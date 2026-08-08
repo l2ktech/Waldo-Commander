@@ -171,6 +171,26 @@ async def test_pre_grasp_uses_saved_current_hardware_pose(monkeypatch) -> None:
     ]
 
 
+def test_pre_grasp_starts_with_one_button_click(monkeypatch) -> None:
+    panel = object.__new__(control.ControlPanel)
+    started: list[str] = []
+
+    async def move() -> None:
+        started.append("move")
+
+    def schedule(coroutine) -> None:
+        started.append("scheduled")
+        coroutine.close()
+
+    panel._execute_pre_grasp_move = move
+    monkeypatch.setattr(control, "_safe_task", schedule)
+    monkeypatch.setattr(control.waldoctl.commander.status, "editing_mode", False)
+
+    panel.send_pre_grasp()
+
+    assert started == ["scheduled"]
+
+
 @pytest.mark.asyncio
 async def test_zdt_hardware_home_routes_to_calibration_home(monkeypatch) -> None:
     panel = object.__new__(control.ControlPanel)
