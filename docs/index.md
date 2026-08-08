@@ -49,6 +49,14 @@ In the control panel, switch to the **Settings** tab and select your hardware co
   <source src="https://github.com/Jepson2k/Waldo-Commander/releases/download/docs-assets/connecting_to_robot.mp4" type="video/mp4">
 </video>
 
+### PAROL6 ZDT power-cycle recovery and Home
+
+5800X operators must follow [`PAROL6-ZDT操作员坐标恢复与Home.md`](PAROL6-ZDT操作员坐标恢复与Home.md):
+after a power cycle, place the arm near the signed Home and use **不运动坐标重建** first.
+It uses current `0x31` for within-turn precision and `0x36` only for multi-turn selection, without
+moving the arm. **Home** is a separate active MoveJ to the exact canonical target. The 3D model
+uses a J2-only `-20°` display offset while numeric readouts and motion commands stay canonical.
+
 ### Programming, Recording, and Path Visualization
 
 Write robot programs in Python using the built-in editor with auto-complete for all robot commands. Or jog the robot into position and let the recorder generate `move_j` / `move_l` calls for you — I/O and tool actions are captured too. Right-click in the 3D view to place targets, press **T** to add one at the current pose, or drag existing targets with the gizmo to reposition them.

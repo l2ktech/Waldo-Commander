@@ -24,6 +24,14 @@ Open the printed URL. No robot connected? The app auto-starts in simulator mode 
 
 For connecting hardware, platform-specific setup, and configuration, see [Getting Started](https://jepson2k.github.io/Waldo-Commander/getting-started/).
 
+For the 5800X PAROL6 ZDT operator workflow, see
+[`docs/PAROL6-ZDT操作员坐标恢复与Home.md`](docs/PAROL6-ZDT操作员坐标恢复与Home.md).
+After a power cycle, place the arm near the signed Home and click **不运动坐标重建** first.
+That button restores multi-turn coordinates from the current `0x31` within-turn reading and
+`0x36` turn selection without moving the arm. Click **Home** only when the arm should actively
+MoveJ to the exact canonical target. The 3D scene applies a J2-only `-20°` display offset;
+readouts and motion commands remain canonical.
+
 ## Links
 
 - [Documentation](https://jepson2k.github.io/Waldo-Commander/)
