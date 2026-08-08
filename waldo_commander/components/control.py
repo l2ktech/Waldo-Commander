@@ -167,6 +167,19 @@ _ZDT_CALIBRATION_HOME_JOINTS_DEG = (
     -41.873931884765625,
     90.01020159040179,
 )
+
+# Operator-selected pre-grasp waypoint, captured from the authoritative 01
+# status while the arm was stopped on 2026-08-07.  These are canonical joint
+# coordinates; the 8011 scene-only J2 visual compensation never applies to a
+# MoveJ target.
+_ZDT_PRE_GRASP_JOINTS_DEG = (
+    0.1338958740234375,
+    -73.07270250822368,
+    165.7317352294922,
+    0.08514404296875,
+    -75.18722534179688,
+    89.96939522879464,
+)
 _JOINT_LIMIT_COMMAND_MARGIN_DEG = 0.5
 
 
@@ -2587,6 +2600,33 @@ class ControlPanel:
                 )
         dialog.open()
 
+    async def _execute_pre_grasp_move(self) -> None:
+        """Move to the operator-selected ZDT pre-grasp waypoint."""
+        if not self._movement_allowed():
+            return
+
+        async def move() -> None:
+            await self.client.move_j(
+                list(_ZDT_PRE_GRASP_JOINTS_DEG),
+                speed=_norm_speed(),
+                accel=_norm_accel(),
+                wait=True,
+                timeout=self.EXACT_MOVE_TIMEOUT_S,
+            )
+            ui_client = getattr(self, "_ui_client", None)
+            if ui_client is not None:
+                with ui_client:
+                    ui.notify("机械臂已到达准备抓取位。", color="positive")
+
+        await self._run_incremental_move("pre-grasp", move)
+
+    def send_pre_grasp(self) -> None:
+        """Start the bounded move to the saved pre-grasp waypoint."""
+        if waldoctl.commander.status.editing_mode:
+            ui.notify("请先点击红叉退出姿态对齐模式。", color="warning")
+            return
+        _safe_task(self._execute_pre_grasp_move())
+
     async def _execute_multiturn_home_restore(self) -> None:
         """Start the no-motion 0x31 multi-turn coordinate restore service."""
         ui_client = getattr(self, "_ui_client", None)
@@ -3466,6 +3506,13 @@ class ControlPanel:
                 ).props("dense round unelevated color=indigo-6")
                 restore_btn.tooltip("当前位置恢复多圈坐标（不运动）")
                 restore_btn.mark("btn-home-coordinate-restore")
+
+                pre_grasp_btn = ui.button(
+                    icon="near_me",
+                    on_click=self.send_pre_grasp,
+                ).props("dense round unelevated color=orange-7")
+                pre_grasp_btn.tooltip("一键前往保存的准备抓取位")
+                pre_grasp_btn.mark("btn-pre-grasp")
 
             robot_btn = (
                 ui.button(
